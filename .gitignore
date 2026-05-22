@@ -1,0 +1,13 @@
+# Compiled binaries (Recommended to upload to GitHub Releases instead of tracking in Git)
+*.exe
+
+# Windows temporary / system files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Temporary clips or user cache
+temp_clip.png
+*.log
+*.tmp
