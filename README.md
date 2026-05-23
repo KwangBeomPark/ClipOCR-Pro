@@ -232,21 +232,25 @@ Licensed under the [MIT License](LICENSE). GDI+ library wrapper by Tariq Porter 
 GDI+ wrapper by Tariq Porter (tic)  
 OCR wrapper by Descolada
 ---
+
 ## ☕ Support This Project
 
 If this tool helps reduce repetitive work or improves productivity,
 consider supporting future automation projects.
 
 <p align="center">
-  <a href="https://www.buymeacoffee.com/KBPark_Bob">
-    <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png"
-         width="220">
+  <a href="https://www.buymeacoffee.com/KBPark_Bob"
+     target="_blank"
+     rel="noopener noreferrer">
+    <img
+      src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png"
+      alt="Buy Me A Coffee"
+      width="220">
   </a>
 </p>
 
 Your support helps me continue building practical automation tools
-for everyday office workflows.
-
 ---
 
+for everyday office workflows.
 
