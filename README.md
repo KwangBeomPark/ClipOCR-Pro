@@ -1,8 +1,9 @@
 # 📸 ScreenClip Tool v1 (Dynamic Screenshot & OCR Automation Suite)
 
 <p align="center">
-  <img src="demo.gif" width="900">
+  <img src="https://raw.githubusercontent.com/KwangBeomPark/AHK-ScreenClip-OCR-Automation/main/demo.gif" width="900">
 </p>
+
 An advanced, production-ready productivity tool built with **AutoHotkey v2** and **GDI+ (Graphics Device Interface)**. Unlike standard snipping utilities, ScreenClip Tool creates interactive, floating, always-on-top screenshot windows that support real-time annotation (drawing/highlighting with undo support), dynamic image scaling, layout cascade sorting across multi-monitor setups, and advanced multilingual OCR (Optical Character Recognition) with automated browser translation fallbacks.
 
 AutoHotkey v2와 GDI+를 기반으로 구현된 고성능 화면 캡처 및 OCR 업무 자동화 툴입니다. 일반적인 캡처 도구와 달리 캡처한 이미지를 독립된 플로팅 항상-위 창으로 띄우며, 실시간 주석 그리기(Undo 지원), 이미지 스케일링, 다중 모니터 정렬, 다국어 OCR 판독 및 브라우저 연동 자동 번역 등 강력한 실무 편의 기능을 제공합니다.
