@@ -224,31 +224,6 @@ Settings → Time & Language → Language → Add language → Enable OCR packag
 * **업무 자동화(RPA)급 연동:** 백그라운드 브라우저의 HWND를 직접 매칭하고 포커스를 조율하는 세련된 윈도우 제어 테크닉을 활용하여, 이미지 복사에서 브라우저 전송까지 끊김 없고 플리커 현상 없는 자동 프로세스를 구축했습니다.
 
 ---
----
-
-## ☕ Support This Project
-
-If this tool saves your time or improves your workflow, consider supporting future development.
-
-<p align="center">
-<a href="https://buymeacoffee.com/KBPark_Bob">
-<img src="https://img.buymeacoffee.com/button-api/?text=Support future automation projects&emoji=☕&slug=KBPark_Bob">
-</a>
-</p>
-
-Your support helps me continue exploring:
-
-- Productivity engineering
-- Workflow automation
-- OCR tools
-- Office automation
-- Practical software projects outside traditional development roles
-
-감사합니다 🙏
-
----
-
-
 ## 📄 License (라이선스)
 
 Licensed under the [MIT License](LICENSE). GDI+ library wrapper by Tariq Porter (tic), and OCR wrapper by Descolada.
@@ -256,3 +231,22 @@ Licensed under the [MIT License](LICENSE). GDI+ library wrapper by Tariq Porter 
 
 GDI+ wrapper by Tariq Porter (tic)  
 OCR wrapper by Descolada
+---
+## ☕ Support This Project
+
+If this tool helps reduce repetitive work or improves productivity,
+consider supporting future automation projects.
+
+<p align="center">
+  <a href="https://www.buymeacoffee.com/KBPark_Bob">
+    <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png"
+         width="220">
+  </a>
+</p>
+
+Your support helps me continue building practical automation tools
+for everyday office workflows.
+
+---
+
+
