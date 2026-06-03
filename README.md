@@ -1,3 +1,4 @@
+*Read this in other languages: [English](README.md), [한국어](README.Korean.md)*
 # 📸 Practical Automation for Everyday Office Workflows  
 (AI-Assisted ScreenClip Tool v1)
 
