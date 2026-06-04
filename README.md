@@ -1,4 +1,4 @@
-# 📸 Practical Automation for Everyday Office Workflows 
+# 📸 ClipOCR-Pro: Office Screen Capture, OCR & Translation Tool
 (AI-Assisted ScreenClip Tool v1)
 
 <p align="center">
