@@ -1,5 +1,4 @@
-# 📸 Practical Automation for Everyday Office Workflows 
-(AI-Assisted ScreenClip Tool v1)
+# 📸 ClipOCR-Pro 화면 캡처 및 번역 업무 자동화 도구
 
 <p align="center">
   <img src="./demo.gif" width="900">
