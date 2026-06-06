@@ -1,91 +1,148 @@
+*Read this in other languages: [English](README.md), [한국어](README.ko.md)*
+
 # 📸 ClipOCR-Pro: Office Screen Capture, OCR & Translation Tool
-(AI-Assisted ScreenClip Tool v1)
+A portable screen capture, OCR, selected-text translation, and image workflow tool for practical office work, built with AutoHotkey v2.
 
 <p align="center">
-  <img src="./demo.gif" width="900">
+  <img src="./demo.gif" width="900" alt="ClipOCR-Pro Demo">
 </p>
 
 ---
 
-I am **not a professional developer, but a finance practitioner**.
-I started developing this to reduce repetitive tasks such as **screen capturing, selected text translation, document organization, and information sharing**,
-and this small automation script has gradually evolved into a practical productivity tool.
+## What ClipOCR-Pro Does
 
-> **Reducing repetitive work · Improving team productivity · Workflow automation · Solving practical problems**
-This is a business support tool created with these goals in mind.
+**ClipOCR-Pro** helps office professionals capture screen areas, keep reference images floating on top, annotate captured images, translate selected text, and streamline document review workflows.
 
+It is designed especially for finance, accounting, sales administration, credit control, and back-office teams that frequently compare ERP data, Excel files, emails, scanned documents, screenshots, and supporting evidence.
+
+> **Capture Faster · Review Documents Clearly · Translate Selected Text · Reduce Repetitive Screen Work**
 
 ---
 
-# 🚀 Download & Quick Start
+## Core Features
 
-**ClipOCR-Pro** is a **portable application** that runs immediately with a simple double-click—no tedious installation required.  
-It is specifically designed for easy distribution, allowing general team members with no programming background or advanced computer skills to utilize it instantly with just one click.
+- **📸 Screen Area Capture**: Capture any selected area with a hotkey and keep it as a floating always-on-top reference window.
+- **🖍️ Quick Annotation**: Mark captured images with red boxes, highlights, and simple visual notes during review.
+- **🌐 Selected Text Translation**: Translate selected text using the configured translation workflow.
+- **🖼️ Image Translation Workflow**: Send captured images to Google Image Translation when needed for email attachments, scanned documents, and overseas evidence.
+- **📐 Image Resize & Copy**: Resize captured images based on app settings before copying or pasting into documents, emails, or reports.
+- **🖥️ Multi-Monitor Support**: Use capture and floating windows across multi-monitor office environments.
+
+---
+
+## 🚀 Download & Quick Start
+
+**ClipOCR-Pro** is a **portable application**. It runs by double-clicking the executable and does not require a complex installation process.
 
 ### 📥 For General Users (One-Click Portable Download)
-1. Navigate to the **[Releases]** tab on the right side of the GitHub page.
-2. Download the latest standalone executable **`ClipOCR-Pro.zip`** or **`ClipOCR-Pro.exe`**.
-3. Extract the ZIP file and double-click **`ClipOCR-Pro.exe`**. An icon will appear in your Windows system tray, and the tool will be ready to use immediately!
-   - *💡 **Team Productivity Tip**: A manager can configure the optimal settings (`config.ini`) and distribute this configuration file to colleagues. Placing it in the same folder as the executable ensures an instant **standardization of productivity across the entire department**.*
+
+1. Go to the **[Releases](https://github.com/KwangBeomPark/ClipOCR-Pro/releases)** tab on the right side of the GitHub repository.
+2. Download the latest **`ClipOCR-Pro.zip`** or standalone **`ClipOCR-Pro.exe`** file.
+3. Unzip the file if needed, then double-click **`ClipOCR-Pro.exe`**.
+4. An icon will appear in the Windows system tray, and ClipOCR-Pro is ready to use.
+
+If no release file is available yet, please build or run the source using AutoHotkey v2.
 
 ### 🛠️ For Power Users & Developers (Custom Build)
-This software is **100% open-source** with fully transparent code. If you wish to add custom features or enhance the tool, follow these steps:
+
 1. Install [AutoHotkey v2](https://www.autohotkey.com/).
-2. Clone this repository and customize the `ClipOCR-Pro.ahk` source code to fit your needs.
-3. Use the AutoHotkey compiler (Ahk2Exe) or the included build scripts to package your own custom `ClipOCR-Pro.exe` with personalized icons and metadata.
+2. Clone this repository.
+3. Customize `ClipOCR-Pro.ahk` as needed.
+4. Use the AutoHotkey compiler, Ahk2Exe, or the included build scripts to package your own `ClipOCR-Pro.exe` with custom icons and metadata.
 
 ---
 
-# 💼 Real-World Use Cases
-- **Settlement & Supporting Document Review**: Highlight key information to help approvers quickly verify details
-- **Translation of Overseas Emails & Documents**: Utilize selected text translation or Google Image Translation
-- **Multi-Source Comparison**: Compare ERP / Excel / emails / supporting documents simultaneously
-- **Report Preparation**: Keep multiple references visible on the screen while working
-- **Meetings & Training Sessions**: Capture parts of manuals and explain by minimizing/restoring
-- **Image Translation**: Check email attachments and scanned documents via Google Image Translation
-- **Document Attachment Optimization**: Resize captured images based on app settings before pasting
+## 💼 Practical Business Use Cases
+
+- **Settlement and supporting document review**: Capture key areas from invoices, ERP screens, Excel sheets, and evidence files so approvers can verify details quickly.
+- **Overseas email and document translation**: Translate selected text or use image translation for foreign-language attachments and scanned documents.
+- **Multi-source comparison**: Keep ERP, Excel, emails, screenshots, and supporting documents visible at the same time for reconciliation or review.
+- **Report preparation**: Keep reference images floating on top while drafting reports, emails, or internal explanations.
+- **Meetings and training**: Capture a part of a manual, annotate it, minimize/restore it, and explain the process clearly.
+- **Email attachment optimization**: Resize captured images before pasting them into emails or documents to reduce file size and improve readability.
 
 ---
 
-# 📖 User Guide
-✔ Always-on-top floating capture window, highlighter, multi-monitor alignment  
-✔ Capture image → Paste into Google Translate browser (Korean / English / Polish)  
-✔ Selected text translation, image resizing  
+## 📖 User Guide
 
-<p align="center">
-<img src="./App01Manual.png" width="1000">
-</p>
+✔ **Capture Window**: Capture a selected screen area and keep it as an always-on-top floating image.  
+✔ **Annotation**: Add red boxes, highlights, and quick visual emphasis to captured images.  
+✔ **Translation**: Translate selected text or use image translation workflows when working with foreign-language documents.  
+✔ **Copy / Save / Resize**: Copy, save, resize, or reuse captured images based on app settings.  
+✔ **Window Management**: Minimize, restore, align, resize, or close floating capture windows using shortcuts.
+
+> Manual infographic note: if you add a manual image later, place it in the repository as `App01Manual.png` and reference it here.
 
 ---
 
-# ⌨️ Main Shortcuts
+## ⌨️ Main Shortcuts
 
 | Shortcut | Function |
-|---------|------|
-| `Win + Drag` | Capture screen and float on top |
-| `Win + CapsLock` | Translate selected text using Google Translate API |
-| `Mouse Right` on floating window | Open image translation, annotation, copy/save, and window management menu |
-| `Double Click` on floating window | Minimize / Restore |
-| `Ctrl + C` on floating window | Copy floating image |
-| `Shift + Drag`, `Ctrl + Drag`, `Alt + Drag`, `Ctrl + Z` on floating window | RedBox, Yellow, Green, Undo |
-| `Ctrl + ↑(Up)`, `Ctrl + ↓(Down)`, `Ctrl + ←(Left)`, `Ctrl + Esc` on floating window | (Adjust floating image) Minimize, Original size, Align left, Close all |
+|---------|----------|
+| `Win + Drag` | Capture a screen area and keep it floating on top |
+| `Win + CapsLock` | Translate selected text using the configured Google Translate workflow |
+| Right-click on floating window | Open image translation, annotation, copy/save, and window management menu |
+| Double-click on floating window | Minimize or restore the floating image |
+| `Ctrl + C` on floating window | Copy the floating image |
+| `Shift + Drag`, `Ctrl + Drag`, `Alt + Drag`, `Ctrl + Z` on floating window | Red box, yellow highlight, green highlight, undo |
+| `Ctrl + ↑`, `Ctrl + ↓`, `Ctrl + ←`, `Ctrl + Esc` on floating window | Minimize, restore original size, align left, close all |
 
 ---
 
-# Environment & License
-🖥️ Supported Environment: Windows 10 / 11, ✘ macOS not supported (Would love to try with Rust someday~)
-📄 License: MIT License (GDI+ wrapper by Tariq Porter (tic))
+## ⚙️ Settings File & Team Deployment
+
+ClipOCR-Pro stores configuration data in a local `config.ini` file.
+
+For team deployment, one manager can configure the preferred capture size, translation options, resize settings, and other defaults first, then distribute the `config.ini` file to colleagues.
+
+Recommended portable deployment structure:
+
+```text
+ClipOCR-Pro.exe
+config.ini
+```
+
+Placing the shared `config.ini` in the same folder as the executable helps team members start with the same configuration without manual setup.
+
+---
+
+## 🔐 Security & Privacy
+
+- ClipOCR-Pro runs locally on Windows.
+- Local capture, annotation, copy, save, and resize actions are handled on the user's PC.
+- When translation features are used, selected text or images may be processed through external translation services such as Google Translate, depending on the configured workflow.
+- Avoid translating or storing passwords, API keys, personal credentials, confidential financial data, or highly sensitive documents through external services.
+- Review `config.ini` before distributing it to colleagues, especially if it contains API-related or workflow-specific settings.
+
+---
+
+## 👨‍💼 Project Background
+
+I am **not a professional developer, but a finance practitioner working with real business operations.**
+
+I started this project to reduce repetitive office tasks such as screen capture, selected text translation, document organization, and information sharing. What began as a small automation script gradually evolved into a practical productivity tool for real office workflows.
+
+ClipOCR-Pro reflects a hands-on approach: identify repetitive work, automate the practical pain points, and make the result simple enough for non-developers to use.
+
+---
+
+## 💻 Environment & License
+
+- **Environment**: Windows 10 / 11, AutoHotkey v2 runtime, or compiled standalone executable
+- **macOS**: Not supported
+- **License**: MIT License. Includes GDI+ wrapper by Tariq Porter (tic).
 
 ---
 
 ## ☕ Support This Project
-If this tool has helped reduce repetitive work or improved your productivity,
-your small support will be a great help in creating more practical automation tools in the future.
+
+If this tool has helped reduce repetitive work or improved your productivity, your support is a great motivation for creating more practical office automation tools.
 
 <p align="center">
   <a href="https://www.buymeacoffee.com/KBPark_Bob">
     <img
       src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png"
-      width="220">
+      width="220"
+      alt="Buy Me A Coffee">
   </a>
 </p>
