@@ -1,5 +1,16 @@
 # Compiled binaries (Recommended to upload to GitHub Releases instead of tracking in Git)
 *.exe
+*.zip
+dist/
+build/
+release/
+out/
+
+# Local editor settings
+.vscode/
+
+# Demo/source-preparation working files
+tools/
 
 # Windows temporary / system files
 Thumbs.db
