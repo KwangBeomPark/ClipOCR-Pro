@@ -1,6 +1,30 @@
 #Requires AutoHotkey v2.0
 #SingleInstance Force
+;@Ahk2Exe-SetMainIcon ..\assets\ClipOCR-Pro.ico
 #Include Gdip_All.ahk
+
+; ── App metadata ──
+global APP_NAME := "ClipOCR-Pro"
+global APP_VERSION := "1.1.1"
+global APP_ICON_PATH := A_IsCompiled ? A_ScriptFullPath : A_ScriptDir "\..\assets\ClipOCR-Pro.ico"
+global APP_SOURCE_ICON_PATH := A_ScriptDir "\..\assets\ClipOCR-Pro.ico"
+
+; ── Global asset paths and initialization ──
+global bmcBtnPath := A_Temp "\ClipOCR_bmc_btn.png"
+global githubIconPath := A_Temp "\ClipOCR_github_favicon.png"
+
+; Download the GitHub favicon in the background.
+SetTimer(DownloadGithubIcon, -100)
+DownloadGithubIcon() {
+    global githubIconPath
+    if !FileExist(githubIconPath) {
+        try Download("https://www.google.com/s2/favicons?domain=github.com&sz=256", githubIconPath)
+    }
+}
+
+; ── Per-Monitor DPI Aware V2: fixes scaling mismatches across monitors ──
+; Use physical pixels for all coordinates so capture remains accurate across mixed-DPI monitors.
+DllCall("SetThreadDpiAwarenessContext", "ptr", -4, "ptr")
 
 if !pToken := Gdip_Startup() {
     MsgBox "GDI+ failed to start."
@@ -10,52 +34,45 @@ if !pToken := Gdip_Startup() {
 OnExit AppCleanup
 
 AppCleanup(*) {
-    global pToken
-    Gdip_Shutdown(pToken)
+    global pToken, TEMP_FILES
+    try Gdip_Shutdown(pToken)
     try FileDelete(A_Temp "\temp_clip.png")
-}
-
-; ── config.ini 기본 설정 ──
-global CONFIG_FILE := A_ScriptDir "\config.ini"
-
-/**
- * config.ini 파일에서 안전하게 정수 설정을 불러오는 헬퍼 함수
- * Safely loads integer settings from config.ini, defaulting if invalid.
- * @param {String} section - INI 섹션 이름 / Section name
- * @param {String} key - INI 키 이름 / Key name
- * @param {Integer} defaultVal - 기본값 / Default value fallback
- * @returns {Integer} 로드된 설정값 혹은 기본값 / Loaded value or fallback
- */
-LoadIntSetting(section, key, defaultVal) {
     try {
-        val := IniRead(CONFIG_FILE, section, key, String(defaultVal))
-        return IsInteger(val) ? Integer(val) : defaultVal
-    } catch {
-        return defaultVal
+        for _, filePath in TEMP_FILES {
+            if FileExist(filePath)
+                FileDelete(filePath)
+        }
     }
 }
 
-global MINI_SIZE := LoadIntSetting("UI", "MINI_SIZE", 80)
-global MINI_OPACITY := LoadIntSetting("UI", "MINI_OPACITY", 128)
-global BORDER_WIDTH := LoadIntSetting("UI", "BORDER_WIDTH", 3)
-global UNDO_MAX := LoadIntSetting("Behavior", "UNDO_MAX", 5)
+; ── UI and behavior constants ──
+global MINI_SIZE := 80          ; Minimized window size (px)
+global MINI_OPACITY := 128      ; Minimized opacity (0-255)
+global BORDER_WIDTH := 3        ; Capture window border width (px)
+global UNDO_MAX := 5            ; Maximum undo steps
+global TEXT_TRANSLATE_MAX_CHARS := 5000 ; Safe maximum length for Google Text Translation GET requests
 
-; ── Windows 설정 저장소(Registry)에 보관하는 사용자 설정 ──
+; ── User settings: keep the Registry path name for backward compatibility ──
 global REG_PATH := "HKCU\Software\ScreenClipTool"
 global CLIP_SCALE := 1.0
 global TEXT_TRANSLATE_LANG := "ko"
 global TEXT_TRANSLATE_HOTKEY := "#CapsLock"
+global TEXT_TRANSLATE_FONT_SIZE := 10
+global IMAGE_TRANSLATE_LANGS := "ko,en,pl"
 
-; ── 실행 중 상태값: 메뉴 이름, 열린 창 ID, Annotation 모드, 마지막 텍스트 선택 창 ──
+; ── Runtime state ──
 global TRAY_TEXT_TRANSLATE_ITEM := ""
 global TextTranslatePopupHwnd := 0
-global SettingsHwnd := 0
+global DashboardHwnd := 0
+global ManualHwnd := 0
 global ANNOTATION_MODE := ""
 global ANNOTATION_TARGET_HWND := 0
 global TEXT_SOURCE_LAST_HWND := 0
+global TEMP_FILES := []
+global ENABLE_BMC_AUTO_DOWNLOAD := true
 
 try {
-    CLIP_SCALE := Float(RegRead(REG_PATH, "Scale"))
+    CLIP_SCALE := NormalizeClipScale(RegRead(REG_PATH, "Scale"))
 } catch {
     CLIP_SCALE := 1.0
 }
@@ -76,39 +93,56 @@ try {
     TEXT_TRANSLATE_HOTKEY := "#CapsLock"
 }
 
-; ── 시스템 트레이 아이콘 및 메뉴 커스텀 ──
 try {
-    TraySetIcon("shell32.dll", 260) ; 가위 아이콘 (Snipping tool style)
+    TEXT_TRANSLATE_FONT_SIZE := NormalizeTextTranslateFontSize(RegRead(REG_PATH, "TextTranslateFontSize"))
 } catch {
-    ; 실패 시 무시 (기본 아이콘 사용)
+    TEXT_TRANSLATE_FONT_SIZE := 10
 }
-A_IconTip := "Screen Clip Tool"
+
+try {
+    savedImageLangs := RegRead(REG_PATH, "ImageTranslateLangs")
+    IMAGE_TRANSLATE_LANGS := NormalizeLangCodeList(savedImageLangs)
+} catch {
+    IMAGE_TRANSLATE_LANGS := NormalizeLangCodeList(IMAGE_TRANSLATE_LANGS)
+}
+
+; ── System tray icon and menu customization ──
+try {
+    if FileExist(APP_ICON_PATH)
+        TraySetIcon(APP_ICON_PATH)
+    else if FileExist(APP_SOURCE_ICON_PATH)
+        TraySetIcon(APP_SOURCE_ICON_PATH)
+    else
+        TraySetIcon("shell32.dll", 260) ; Scissors icon fallback
+} catch {
+    ; Ignore failures and keep the default icon.
+}
+A_IconTip := APP_NAME
 Tray := A_TrayMenu
 Tray.Delete()
 Tray.Add("📸 Capture (Win+Drag)", (*) => ScreenClip2Win(1))
 TRAY_TEXT_TRANSLATE_ITEM := "🌐 Translate Selected Text (" GetTextTranslateHotkeyLabel(TEXT_TRANSLATE_HOTKEY) ")"
 Tray.Add(TRAY_TEXT_TRANSLATE_ITEM, (*) => TranslateSelectedText(true))
-Tray.Add("⚙️ Settings", (*) => ShowSettingsDialog())
+Tray.Add("⚙️ Preferences & About", (*) => ShowDashboardDialog())
 Tray.Add()
 Tray.Add("📐 Sort All Clips (Ctrl+Left)", (*) => SCW_SortCascade())
 Tray.Add("🔽 Minimize All (Ctrl+Up)", (*) => SCW_MinimizeAll())
 Tray.Add("🔼 Restore All (Ctrl+Down)", (*) => SCW_RestoreAll())
 Tray.Add("❌ Close All Clips (Ctrl+Esc)", (*) => SCW_CloseAll())
 Tray.Add()
-Tray.Add("ℹ️ About App", (*) => ShowAboutDialog())
 Tray.Add("🔄 Reload Script", (*) => Reload())
 Tray.Add("🚪 Exit App", (*) => ExitApp())
 
-; ── 캡처 창과 우클릭 메뉴 상태 ──
+; ── Capture window and context-menu state ──
 global ClipWins := Map()
 global RightClickedHwnd := 0
 global ClipMenu := Menu()
 
-global bmcBtnPath := A_Temp "\bmc_btn.png"
-global AboutHwnd := 0
+; bmcBtnPath is defined with the global asset paths near the top of the script.
 
-; Background download of Buy Me a Coffee button image
-SetTimer(DownloadBmcButton, -100)
+; Do not auto-download external images by default in corporate security environments.
+if ENABLE_BMC_AUTO_DOWNLOAD
+    SetTimer(DownloadBmcButton, -100)
 
 DownloadBmcButton() {
     global bmcBtnPath
@@ -119,11 +153,43 @@ DownloadBmcButton() {
     }
 }
 
-; Google Image 번역 서브메뉴 (타겟 언어 선택)
-ImgTransMenu := Menu()
-ImgTransMenu.Add("🇰🇷 Translate to Korean", (*) => GoogleImageTranslate("ko"))
-ImgTransMenu.Add("🇬🇧 Translate to English", (*) => GoogleImageTranslate("en"))
-ImgTransMenu.Add("🇵🇱 Translate to Polish", (*) => GoogleImageTranslate("pl"))
+; Google Image Translation submenu for target-language selection.
+global ImgTransMenu := Menu()
+
+UpdateImageTranslateMenu() {
+    global ImgTransMenu, IMAGE_TRANSLATE_LANGS
+    ImgTransMenu.Delete()
+    IMAGE_TRANSLATE_LANGS := NormalizeLangCodeList(IMAGE_TRANSLATE_LANGS)
+
+    langArray := StrSplit(IMAGE_TRANSLATE_LANGS, ",")
+    if (langArray.Length == 0)
+        langArray := ["ko"]
+
+    options := GetTextTranslateLangOptions()
+
+    for _, code in langArray {
+        code := Trim(code)
+        if (code == "")
+            continue
+
+        label := "🌐 Translate to " code
+        for _, opt in options {
+            if (opt.code == code) {
+                label := "🌐 Translate to " opt.label
+                break
+            }
+        }
+
+        ; Bind through a local-scope function for lambda closure safety.
+        BindGoogleImageTranslate(c) {
+            return (*) => GoogleImageTranslate(c)
+        }
+
+        ImgTransMenu.Add(label, BindGoogleImageTranslate(code))
+    }
+}
+
+UpdateImageTranslateMenu()
 
 ClipMenu.Add("🌐 1. Google Translate (Image)", ImgTransMenu)
 ClipMenu.Add() ; Separator
@@ -131,15 +197,16 @@ ClipMenu.Add() ; Separator
 ClipMenu.Add("🟥 2. Red Box (Shift+Drag)", MenuHandler)
 ClipMenu.Add("🟨 3. Yellow Highlight (Ctrl+Drag)", MenuHandler)
 ClipMenu.Add("🟩 4. Green Highlight (Alt+Drag)", MenuHandler)
-ClipMenu.Add("↩️ 5. Undo Draw (Ctrl+Z)", MenuHandler)
+ClipMenu.Add("✍️ 5. Text Markup (Shift+Ctrl+Click)", MenuHandler)
+ClipMenu.Add("↩️ 6. Undo Draw (Ctrl+Z)", MenuHandler)
 ClipMenu.Add() ; Separator
 
-ClipMenu.Add("📋 6. Copy to Clipboard (Ctrl+C)", MenuHandler)
-ClipMenu.Add("💾 7. Save to Desktop (Ctrl+S)", MenuHandler)
-ClipMenu.Add("🎨 8. Copy To Paint", MenuHandler)
+ClipMenu.Add("📋 7. Copy to Clipboard (Ctrl+C)", MenuHandler)
+ClipMenu.Add("💾 8. Save to Desktop (Ctrl+S)", MenuHandler)
+ClipMenu.Add("🎨 9. Copy To Paint", MenuHandler)
 ClipMenu.Add() ; Separator
 
-; 9. 클립보드 스케일 서브메뉴
+; 10. Clipboard scale submenu
 ScaleMenu := Menu()
 ScaleMenu.Add("50%", (*) => SetClipScale(0.5))
 ScaleMenu.Add("60%", (*) => SetClipScale(0.6))
@@ -150,16 +217,16 @@ ScaleMenu.Add("100%", (*) => SetClipScale(1.0))
 ScaleMenu.Add("150%", (*) => SetClipScale(1.5))
 UpdateScaleMenu()
 
-ClipMenu.Add("⚙️ 9. Clipboard Scale", ScaleMenu)
+ClipMenu.Add("⚙️ 10. Clipboard Scale", ScaleMenu)
 ClipMenu.Add() ; Separator
-ClipMenu.Add("📐 10. Sort All Clips (Ctrl+Left)", (*) => SCW_SortCascade())
-ClipMenu.Add("🔽 11. Minimize All (Ctrl+Up)", (*) => SCW_MinimizeAll())
-ClipMenu.Add("🔼 12. Restore All (Ctrl+Down)", (*) => SCW_RestoreAll())
-ClipMenu.Add("❌ 13. Close All Clips (Ctrl+Esc)", (*) => SCW_CloseAll())
-ClipMenu.Add("ℹ️ 14. App Info", (*) => ShowAboutDialog())
+ClipMenu.Add("📐 11. Sort All Clips (Ctrl+Left)", (*) => SCW_SortCascade())
+ClipMenu.Add("🔽 12. Minimize All (Ctrl+Up)", (*) => SCW_MinimizeAll())
+ClipMenu.Add("🔼 13. Restore All (Ctrl+Down)", (*) => SCW_RestoreAll())
+ClipMenu.Add("❌ 14. Close All Clips (Ctrl+Esc)", (*) => SCW_CloseAll())
+ClipMenu.Add("⚙️ 15. Preferences & About", (*) => ShowDashboardDialog())
 
-; ── 시작 시 환영 툴팁 ──
-ToolTip("📸 Screen Clip Tool Ready!`r`nWin+드래그: 캡처`r`n" GetTextTranslateHotkeyLabel(TEXT_TRANSLATE_HOTKEY) ": 선택 텍스트 번역")
+; ── Startup welcome tooltip ──
+ToolTip("📸 " APP_NAME " Ready!`r`nWin+드래그: 캡처`r`n" GetTextTranslateHotkeyLabel(TEXT_TRANSLATE_HOTKEY) ": 선택 텍스트 번역")
 SetTimer(() => ToolTip(), -4000)
 
 SetTimer(TrackLastTextSourceWindow, 250)
@@ -167,7 +234,7 @@ ApplyTextTranslateHotkey()
 
 ; Hotkeys
 #LButton:: ScreenClip2Win(1)  ; Win+LButton -> floating clip + auto copy to clipboard
-#CapsLock:: TranslateSelectedText(false) ; 기본 선택 텍스트 번역 단축키
+#CapsLock:: TranslateSelectedText(false) ; Default selected-text translation hotkey
 
 #HotIf WinActive("ScreenClippingWindow ahk_class AutoHotkeyGUI")
 ^c:: SCW_Win2Clipboard()
@@ -177,7 +244,7 @@ ApplyTextTranslateHotkey()
 ^Up:: SCW_MinimizeAll()
 ^Down:: SCW_RestoreAll()
 Esc:: SCW_CloseWin()
-^Esc:: SCW_CloseAll() ; Ctrl+Esc -> 전체 닫기
+^Esc:: SCW_CloseAll() ; Ctrl+Esc -> close all
 #HotIf
 
 /**
@@ -201,6 +268,114 @@ ScreenClip2Win(clipToClipboard := 0) {
     }
 }
 
+NormalizeClipScale(value) {
+    try {
+        scale := Float(value)
+    } catch {
+        return 1.0
+    }
+
+    for _, allowed in [0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.5] {
+        if (Abs(scale - allowed) < 0.001)
+            return allowed
+    }
+    return 1.0
+}
+
+NormalizeTextTranslateFontSize(value) {
+    try {
+        fontSize := Integer(value)
+    } catch {
+        return 10
+    }
+
+    ; Keep the translation popup in a practical size range.
+    if (fontSize < 8 || fontSize > 18)
+        return 10
+    return fontSize
+}
+
+NormalizeLangCodeList(csvText, defaultCsv := "ko,en,pl") {
+    result := []
+    seen := Map()
+
+    AddCode(code) {
+        code := StrLower(Trim(code))
+        if (code == "" || seen.Has(code) || !IsTextTranslateLangSupported(code))
+            return
+        seen[code] := true
+        result.Push(code)
+    }
+
+    for _, code in StrSplit(String(csvText), ",")
+        AddCode(code)
+
+    if (result.Length == 0) {
+        for _, code in StrSplit(defaultCsv, ",")
+            AddCode(code)
+    }
+
+    if (result.Length == 0)
+        result.Push("ko")
+
+    normalized := ""
+    for index, code in result
+        normalized .= (index == 1 ? "" : ",") code
+    return normalized
+}
+
+SafeClipboardBackup() {
+    try {
+        return { ok: true, data: ClipboardAll() }
+    } catch {
+        return { ok: false, data: "" }
+    }
+}
+
+SafeClipboardRestore(clipBackup) {
+    try {
+        if clipBackup.ok {
+            A_Clipboard := clipBackup.data
+            return true
+        }
+    } catch {
+        ; If the clipboard is locked, ignore only the restore failure and keep the app running.
+    }
+    return false
+}
+
+SafeSaveBitmapToFile(pBitmap, filePath) {
+    if (!pBitmap || filePath == "")
+        return false
+    try {
+        result := Gdip_SaveBitmapToFile(pBitmap, filePath)
+        return (result == 0 && FileExist(filePath))
+    } catch {
+        return false
+    }
+}
+
+SafeRegWriteString(value, regPath, valueName) {
+    try {
+        RegWrite(String(value), "REG_SZ", regPath, valueName)
+        return true
+    } catch {
+        return false
+    }
+}
+
+ShortErrorMessage(message, maxLen := 120) {
+    message := Trim(String(message))
+    if (message == "")
+        message := "Unknown error"
+    message := StrReplace(message, "`r`n", " ")
+    message := StrReplace(message, "`n", " ")
+    message := StrReplace(message, "`r", " ")
+    if (StrLen(message) > maxLen)
+        message := SubStr(message, 1, maxLen) "..."
+    return message
+}
+
 /**
  * 선택한 화면 영역을 Google 이미지 번역 페이지로 보냅니다.
  * Sends a selected screen area to Google Translate Image.
@@ -211,11 +386,32 @@ ScreenClip2GoogleImage() {
     if (Area.W < 10 || Area.H < 10)
         return
     pBitmap := Gdip_BitmapFromScreen(Area.X "|" Area.Y "|" Area.W "|" Area.H)
-    Gdip_SetBitmapToClipboard(pBitmap)
-    Gdip_DisposeImage(pBitmap)
-    Run("https://translate.google.com/?sl=auto&tl=ko&op=images")
-    ToolTip("🌐 구글 번역(이미지) 열기 중...`r`n🌐 Opening Google Image Translation...")
-    AutoPasteToGoogleTranslate()
+    if !pBitmap {
+        ToolTip("⚠️ 화면 캡처에 실패했습니다.`r`n⚠️ Screen capture failed.")
+        SetTimer(() => ToolTip(), -3000)
+        return
+    }
+
+    clipBackup := SafeClipboardBackup()
+    if !clipBackup.ok {
+        Gdip_DisposeImage(pBitmap)
+        ToolTip("⚠️ 클립보드를 백업하지 못했습니다.`r`n⚠️ Could not back up clipboard.")
+        SetTimer(() => ToolTip(), -3000)
+        return
+    }
+
+    try {
+        Gdip_SetBitmapToClipboard(pBitmap)
+        Run("https://translate.google.com/?sl=auto&tl=ko&op=images")
+        ToolTip("🌐 구글 번역(이미지) 열기 중...`r`n🌐 Opening Google Image Translation...")
+        AutoPasteToGoogleTranslate(clipBackup)
+    } catch as e {
+        SafeClipboardRestore(clipBackup)
+        ToolTip("⚠️ 이미지 번역 실행 실패: " ShortErrorMessage(e.Message) "`r`n⚠️ Image translation failed.")
+        SetTimer(() => ToolTip(), -3500)
+    } finally {
+        Gdip_DisposeImage(pBitmap)
+    }
 }
 
 /**
@@ -228,11 +424,42 @@ GoogleImageTranslate(targetLang) {
     global RightClickedHwnd
     if !ClipWins.Has(RightClickedHwnd)
         return
+    if !IsTextTranslateLangSupported(targetLang)
+        targetLang := "ko"
+
+    clipBackup := SafeClipboardBackup()
+    if !clipBackup.ok {
+        ToolTip("⚠️ 클립보드를 백업하지 못했습니다.`r`n⚠️ Could not back up clipboard.")
+        SetTimer(() => ToolTip(), -3000)
+        return
+    }
+
     pBitmap := ClipWins[RightClickedHwnd].pBitmap
-    Gdip_SetBitmapToClipboard(pBitmap)
-    Run("https://translate.google.com/?sl=auto&tl=" targetLang "&op=images")
-    ToolTip("🌐 구글 번역(이미지) 열기 중...`r`n🌐 Opening Google Image Translation...")
-    AutoPasteToGoogleTranslate()
+    try {
+        Gdip_SetBitmapToClipboard(pBitmap)
+        Run("https://translate.google.com/?sl=auto&tl=" UriEncode(targetLang) "&op=images")
+        ToolTip("🌐 구글 번역(이미지) 열기 중...`r`n🌐 Opening Google Image Translation...")
+        AutoPasteToGoogleTranslate(clipBackup)
+    } catch as e {
+        SafeClipboardRestore(clipBackup)
+        ToolTip("⚠️ 이미지 번역 실행 실패: " ShortErrorMessage(e.Message) "`r`n⚠️ Image translation failed.")
+        SetTimer(() => ToolTip(), -3500)
+    }
+}
+
+IsGoogleTranslateWindow(hwnd, patterns) {
+    if !hwnd
+        return false
+    try {
+        title := WinGetTitle("ahk_id " hwnd)
+    } catch {
+        return false
+    }
+    for _, pattern in patterns {
+        if InStr(title, pattern)
+            return true
+    }
+    return false
 }
 
 /**
@@ -240,57 +467,84 @@ GoogleImageTranslate(targetLang) {
  * Detects the active browser translation tab and automates clipboard paste (Ctrl+V) inputs.
  * @returns {None}
  */
-AutoPasteToGoogleTranslate() {
+AutoPasteToGoogleTranslate(clipBackup := "") {
     SetTimer(_DoPaste, -1000)
 
     _DoPaste() {
-        ; 다국어 브라우저 타이틀 패턴
+        global ClipWins
+        ; Multilingual browser title patterns.
         patterns := ["Google Translate", "Google 번역", "Tłumacz Google", "translate.google"]
         hwndTarget := 0
+        loweredClips := []
 
-        ; 브라우저 창이 뜰 때까지 최대 5초 대기
-        loop 10 {
-            for _, pattern in patterns {
-                if hwnd := WinExist(pattern) {
-                    hwndTarget := hwnd
+        try {
+            activeHwnd := WinExist("A")
+            if IsGoogleTranslateWindow(activeHwnd, patterns)
+                hwndTarget := activeHwnd
+
+            ; Wait up to 5 seconds for the browser window.
+            loop 10 {
+                if hwndTarget
                     break
+                for _, pattern in patterns {
+                    if hwnd := WinExist(pattern) {
+                        hwndTarget := hwnd
+                        break
+                    }
+                }
+                if hwndTarget
+                    break
+                Sleep(500)
+            }
+
+            if !hwndTarget {
+                ToolTip(
+                    "⚠️ 브라우저를 찾을 수 없습니다. 이미지 번역을 다시 실행해 주세요.`r`n⚠️ Browser not found. Please try image translation again.")
+                SetTimer(() => ToolTip(), -4000)
+                return
+            }
+
+            ; Disable AlwaysOnTop on all capture windows and send them to the bottom of the z-order.
+            for clipHwnd, _ in ClipWins {
+                try {
+                    WinSetAlwaysOnTop(false, "ahk_id " clipHwnd)
+                    loweredClips.Push(clipHwnd)
+                    ; HWND_BOTTOM=1, SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE=0x0013
+                    DllCall("SetWindowPos", "ptr", clipHwnd, "ptr", 1, "int", 0, "int", 0, "int", 0, "int", 0,
+                        "uint", 0x0013)
                 }
             }
-            if hwndTarget
-                break
-            Sleep(500)
-        }
 
-        if !hwndTarget {
-            ToolTip(
-                "⚠️ 브라우저를 찾을 수 없습니다. Ctrl+V로 직접 붙여넣으세요.`r`n⚠️ Browser not found. Please paste manually with Ctrl+V.")
+            try {
+                WinActivate("ahk_id " hwndTarget)
+                WinWaitActive("ahk_id " hwndTarget, , 3)
+            }
+            if !WinActive("ahk_id " hwndTarget)
+                throw Error("Browser activation failed")
+            if !IsGoogleTranslateWindow(WinExist("A"), patterns)
+                throw Error("Active window is not Google Translate")
+
+            Sleep(1500) ; Wait for page loading (1.5 seconds)
+
+            ; Click the browser center to ensure page focus before pasting.
+            WinGetPos(&winX, &winY, &winW, &winH, "ahk_id " hwndTarget)
+            CoordMode("Mouse", "Screen")
+            Click(winX + winW // 2, winY + winH // 2)
+            Send("^v")
+            Sleep(300)
+
+            ToolTip("✅ 이미지 붙여넣기 완료!`r`n✅ Image pasted to Google Translate!")
+            SetTimer(() => ToolTip(), -3000)
+        } catch as e {
+            ToolTip("⚠️ 이미지 붙여넣기 실패: " ShortErrorMessage(e.Message) "`r`n⚠️ Image paste failed.")
             SetTimer(() => ToolTip(), -4000)
-            return
+        } finally {
+            for _, clipHwnd in loweredClips {
+                if WinExist("ahk_id " clipHwnd)
+                    try WinSetAlwaysOnTop(true, "ahk_id " clipHwnd)
+            }
+            SafeClipboardRestore(clipBackup)
         }
-
-        ; 모든 캡처 창의 AlwaysOnTop 해제 + z-order 맨 아래로 이동
-        for clipHwnd, _ in ClipWins {
-            WinSetAlwaysOnTop(false, "ahk_id " clipHwnd)
-            ; HWND_BOTTOM=1, SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE=0x0013
-            DllCall("SetWindowPos", "ptr", clipHwnd, "ptr", 1, "int", 0, "int", 0, "int", 0, "int", 0, "uint", 0x0013)
-        }
-
-        WinActivate("ahk_id " hwndTarget)
-        WinWaitActive("ahk_id " hwndTarget, , 3)
-        Sleep(1000) ; 페이지 로딩 대기
-
-        ; 브라우저 중앙 클릭으로 페이지 포커스 확보 후 붙여넣기
-        WinGetPos(&winX, &winY, &winW, &winH, "ahk_id " hwndTarget)
-        CoordMode("Mouse", "Screen")
-        Click(winX + winW // 2, winY + winH // 2)
-        Send("^v")
-
-        ; 모든 캡처 창의 AlwaysOnTop 복원
-        for clipHwnd, _ in ClipWins
-            WinSetAlwaysOnTop(true, "ahk_id " clipHwnd)
-
-        ToolTip("✅ 이미지 붙여넣기 완료!`r`n✅ Image pasted to Google Translate!")
-        SetTimer(() => ToolTip(), -3000)
     }
 }
 
@@ -328,9 +582,15 @@ GetCopySourceHwnd(fromTray := false) {
 }
 
 TranslateSelectedText(fromTray := false) {
-    global TEXT_TRANSLATE_LANG
+    global TEXT_TRANSLATE_LANG, TEXT_TRANSLATE_MAX_CHARS
     sourceHwnd := GetCopySourceHwnd(fromTray)
-    clipSaved := ClipboardAll()
+    clipSaved := SafeClipboardBackup()
+    if !clipSaved.ok {
+        ToolTip("⚠️ 클립보드를 백업하지 못했습니다.`r`n⚠️ Could not back up clipboard.")
+        SetTimer(() => ToolTip(), -3000)
+        return
+    }
+
     try {
         if sourceHwnd {
             WinActivate("ahk_id " sourceHwnd)
@@ -359,19 +619,33 @@ TranslateSelectedText(fromTray := false) {
             return
         }
 
+        if (StrLen(sourceText) > TEXT_TRANSLATE_MAX_CHARS) {
+            ToolTip("⚠️ 선택 텍스트가 너무 깁니다. " TEXT_TRANSLATE_MAX_CHARS "자 이하만 번역합니다.`r`n⚠️ Selected text is too long.")
+            SetTimer(() => ToolTip(), -3500)
+            return
+        }
+
         ToolTip("🌐 번역 중...`r`n🌐 Translating...")
         translatedText := TranslateTextViaGoogle(sourceText, TEXT_TRANSLATE_LANG)
         ToolTip()
         ShowTextTranslationPopup(sourceText, translatedText)
     } catch as e {
-        ToolTip("❌ 번역 실패: " e.Message "`r`n❌ Translation failed.")
+        ToolTip("❌ 번역 실패: " ShortErrorMessage(e.Message) "`r`n❌ Translation failed.")
         SetTimer(() => ToolTip(), -3500)
     } finally {
-        A_Clipboard := clipSaved
+        SafeClipboardRestore(clipSaved)
     }
 }
 
 TranslateTextViaGoogle(text, targetLang) {
+    global TEXT_TRANSLATE_MAX_CHARS
+    if !IsTextTranslateLangSupported(targetLang)
+        targetLang := "ko"
+    if (Trim(text) == "")
+        throw Error("No text to translate")
+    if (StrLen(text) > TEXT_TRANSLATE_MAX_CHARS)
+        throw Error("Text is too long. Max " TEXT_TRANSLATE_MAX_CHARS " characters.")
+
     url := "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl="
         . targetLang . "&dt=t&q=" . UriEncode(text)
 
@@ -400,7 +674,7 @@ ParseGoogleTranslateResponse(json) {
     text := ""
 
     while (pos <= len) {
-        ; 번역 결과 배열의 첫 번째 문자열만 순서대로 이어 붙인다.
+        ; Append only the first string in each translation result array.
         char := SubStr(json, pos, 1)
         if (char == "`"") {
             pos++
@@ -420,7 +694,7 @@ ParseGoogleTranslateResponse(json) {
             }
             text .= JsonUnescape(str)
 
-            ; 같은 문장 조각 안의 원문/발음 정보는 건너뛴다.
+            ; Skip source text and pronunciation data within the same sentence segment.
             bracketCount := 1
             inString := false
             while (pos <= len && bracketCount > 0) {
@@ -456,7 +730,7 @@ ParseGoogleTranslateResponse(json) {
             pos++
         }
 
-        ; 다음 번역 조각으로 이동한다.
+        ; Move to the next translation segment.
         nextSegFound := false
         while (pos <= len) {
             c := SubStr(json, pos, 1)
@@ -507,68 +781,104 @@ JsonUnescape(text) {
     return out
 }
 
+GetTextTranslationPopupLangItems() {
+    langItems := ["ORIGINAL"]
+    for _, label in GetTextTranslateLangLabels()
+        langItems.Push(label)
+    return langItems
+}
+
+UpdateTextTranslationPopupResult(sourceText, selectedLabel, resultEdit, currentTextRef) {
+    if (selectedLabel == "ORIGINAL") {
+        try {
+            currentTextRef.Value := sourceText
+            resultEdit.Value := sourceText
+        }
+        return
+    }
+
+    targetLang := GetTextTranslateLangCodeByLabel(selectedLabel)
+    try resultEdit.Value := "🌐 Translating..."
+
+    try {
+        translated := TranslateTextViaGoogle(sourceText, targetLang)
+        try {
+            currentTextRef.Value := translated
+            resultEdit.Value := translated
+        }
+    } catch as e {
+        try {
+            currentTextRef.Value := ""
+            resultEdit.Value := "❌ Translation failed: " ShortErrorMessage(e.Message)
+        }
+    }
+}
+
+GetPopupPositionNearMouse(popupW, popupH) {
+    CoordMode("Mouse", "Screen")
+    MouseGetPos(&mx, &my)
+    workLeft := 0, workTop := 0, workRight := A_ScreenWidth, workBottom := A_ScreenHeight
+    loop MonitorGetCount() {
+        MonitorGetWorkArea(A_Index, &mLeft, &mTop, &mRight, &mBottom)
+        if (mx >= mLeft && mx <= mRight && my >= mTop && my <= mBottom) {
+            workLeft := mLeft, workTop := mTop, workRight := mRight, workBottom := mBottom
+            break
+        }
+    }
+
+    xMax := Max(workLeft, workRight - popupW)
+    yMax := Max(workTop, workBottom - popupH)
+    return {
+        x: Min(Max(mx + 16, workLeft), xMax),
+        y: Min(Max(my + 16, workTop), yMax)
+    }
+}
+
 ShowTextTranslationPopup(sourceText, translatedText) {
-    global TextTranslatePopupHwnd, TEXT_TRANSLATE_LANG
+    global TextTranslatePopupHwnd, TEXT_TRANSLATE_LANG, TEXT_TRANSLATE_FONT_SIZE
 
     if (TextTranslatePopupHwnd && WinExist("ahk_id " TextTranslatePopupHwnd))
         WinClose("ahk_id " TextTranslatePopupHwnd)
 
     PopGui := Gui("+AlwaysOnTop +ToolWindow +Border +Resize -DPIScale +MinSize320x200", "Translation by Google")
     PopGui.BackColor := "1E1E24"
-    PopGui.SetFont("s9", "Segoe UI")
+    PopGui.SetFont("s10", "Segoe UI")
 
-    ; ── 상단: 제목 + 임시 번역 언어 선택 ──
+    ; ── Top area: title and temporary translation-language selector ──
     TitleLabel := PopGui.Add("Text", "x14 y12 w220 h22 +BackgroundTrans cFFFFFF", "🌐 Translation by Google")
     TitleLabel.SetFont("s10 Bold", "Segoe UI")
 
-    langItems := ["ORIGINAL"]
-    for _, label in GetTextTranslateLangLabels()
-        langItems.Push(label)
-    initialIdx := GetTextTranslateLangIndex(TEXT_TRANSLATE_LANG) + 1
-    LangCombo := PopGui.Add("DropDownList", "x250 y9 w156 Choose" initialIdx, langItems)
+    LangCombo := PopGui.Add("DropDownList", "x250 y9 w156 Choose" GetTextTranslateLangIndex(TEXT_TRANSLATE_LANG) + 1,
+        GetTextTranslationPopupLangItems())
 
-    ; ── 구분선 ──
+    ; ── Divider ──
     SepLine := PopGui.Add("Text", "x14 y38 w392 h1 Background3F3F46", "")
 
-    ; ── 번역 결과 텍스트 박스 (단일, 읽기전용, 멀티라인, 스크롤) ──
+    ; ── Translation result text box (single read-only multiline control with scroll) ──
     ResultEdit := PopGui.Add("Edit", "x14 y46 w392 h164 ReadOnly +Multi +VScroll", translatedText)
+    ResultEdit.SetFont("s" TEXT_TRANSLATE_FONT_SIZE, "Segoe UI")
 
-    ; ── 하단 버튼 ──
+    ; ── Bottom buttons ──
     CopyBtn := PopGui.Add("Button", "x218 y220 w90 h30", "Copy")
     CloseBtn := PopGui.Add("Button", "x316 y220 w90 h30", "Close")
 
-    ; 현재 표시 중인 텍스트 (Copy용, 클로저 간 공유)
-    currentText := translatedText
+    ; Store the currently displayed text in an object shared by internal events.
+    currentText := { Value: translatedText }
 
-    ; ── 콤보박스 변경 → 자동 재번역 ──
+    ; ── ComboBox change triggers automatic retranslation ──
     OnLangChange(*) {
-        selected := LangCombo.Text
-        if (selected == "ORIGINAL") {
-            currentText := sourceText
-            ResultEdit.Value := sourceText
-        } else {
-            targetLang := GetTextTranslateLangCodeByLabel(selected)
-            ResultEdit.Value := "🌐 Translating..."
-            try {
-                translated := TranslateTextViaGoogle(sourceText, targetLang)
-                currentText := translated
-                ResultEdit.Value := translated
-            } catch as e {
-                currentText := ""
-                ResultEdit.Value := "❌ Translation failed: " e.Message
-            }
-        }
+        UpdateTextTranslationPopupResult(sourceText, LangCombo.Text, ResultEdit, currentText)
     }
     LangCombo.OnEvent("Change", OnLangChange)
 
-    ; ── Copy 버튼 ──
+    ; ── Copy button ──
     CopyTranslated(*) {
-        A_Clipboard := currentText
+        A_Clipboard := currentText.Value
         ToolTip("✅ 번역 결과 복사 완료`r`n✅ Translation copied.")
         SetTimer(() => ToolTip(), -1500)
     }
 
-    ; ── 닫기 처리 ──
+    ; ── Close handling ──
     DestroyPopup(*) {
         global TextTranslatePopupHwnd := 0
         PopGui.Destroy()
@@ -579,9 +889,9 @@ ShowTextTranslationPopup(sourceText, translatedText) {
     PopGui.OnEvent("Close", DestroyPopup)
     PopGui.OnEvent("Escape", DestroyPopup)
 
-    ; ── Resize 핸들러: 컨트롤 위치·크기 동적 조절 ──
+    ; ── Resize handler: dynamically adjust control positions and sizes ──
     OnPopupResize(thisGui, MinMax, Width, Height) {
-        if (MinMax == -1)  ; 최소화 상태면 크기 조정 생략
+        if (MinMax == -1)  ; Skip resizing while minimized.
             return
         m := 14
         LangCombo.Move(Width - 170, 9, 156)
@@ -592,23 +902,24 @@ ShowTextTranslationPopup(sourceText, translatedText) {
     }
     PopGui.OnEvent("Size", OnPopupResize)
 
-    ; ── 마우스 커서 근처에 표시 ──
-    MouseGetPos(&mx, &my)
-    popupW := 420
-    popupH := 360
-    workLeft := 0, workTop := 0, workRight := A_ScreenWidth, workBottom := A_ScreenHeight
-    loop MonitorGetCount() {
-        MonitorGetWorkArea(A_Index, &mLeft, &mTop, &mRight, &mBottom)
-        if (mx >= mLeft && mx <= mRight && my >= mTop && my <= mBottom) {
-            workLeft := mLeft, workTop := mTop, workRight := mRight, workBottom := mBottom
-            break
-        }
-    }
-    xMax := Max(workLeft, workRight - popupW)
-    yMax := Max(workTop, workBottom - popupH)
-    x := Min(Max(mx + 16, workLeft), xMax)
-    y := Min(Max(my + 16, workTop), yMax)
-    PopGui.Show("x" x " y" y " w" popupW " h" popupH)
+    ; ── Show near the mouse cursor with dynamic size based on text length ──
+    sizeFactor := Max(1.0, TEXT_TRANSLATE_FONT_SIZE / 10)
+    popupW := Round(630 * sizeFactor)
+    txtLen := Max(StrLen(sourceText), StrLen(translatedText))
+
+    if (txtLen < 400)
+        popupH := 540
+    else if (txtLen < 1200)
+        popupH := 1080
+    else
+        popupH := 1620
+
+    ; Prevent the popup from becoming too large relative to the primary monitor.
+    if (popupH > A_ScreenHeight - 80)
+        popupH := A_ScreenHeight - 80
+
+    popupPos := GetPopupPositionNearMouse(popupW, popupH)
+    PopGui.Show("x" popupPos.x " y" popupPos.y " w" popupW " h" popupH)
     OnPopupResize(PopGui, 0, popupW, popupH)
     TextTranslatePopupHwnd := PopGui.Hwnd
 }
@@ -703,7 +1014,7 @@ CreateClipWin(pBitmap, x, y) {
     CloseBtn.SetFont("s14 Bold")
     CloseBtn.OnEvent("Click", (*) => CloseClipWin(ClipGui))
 
-    ; 가장 빠른 빈 번호 찾기 (Lowest Available Number)
+    ; Find the lowest available number.
     assignedId := 1
     loop {
         inUse := false
@@ -718,11 +1029,11 @@ CreateClipWin(pBitmap, x, y) {
         assignedId++
     }
 
-    ; 숫자가 더 잘 보이도록 배경 역할을 할 검정색 레이어 (약간 작게)
+    ; Add a slightly smaller black layer behind the number for readability.
     NumBg := ClipGui.Add("Text", "x15 y15 w50 h50 Background222222 Hidden", "")
 
-    ; 축소 시 표시될 번호
-    ; AHK 기본 Text 컨트롤은 완전 투명(+BackgroundTrans)으로 하고, GUI 자체의 투명도로 조절
+    ; Number shown while minimized.
+    ; Keep the AHK Text control fully transparent and use GUI opacity for visibility.
     NumText := ClipGui.Add("Text", "x0 y0 w80 h80 Center 0x200 +BackgroundTrans cYellow Hidden", assignedId)
     NumText.SetFont("s24 Bold", "Verdana")
 
@@ -746,30 +1057,31 @@ CreateClipWin(pBitmap, x, y) {
 }
 
 CloseClipWin(guiObj) {
-    hwnd := guiObj.Hwnd
+    try hwnd := guiObj.Hwnd
+    catch
+        return
+
     if ClipWins.Has(hwnd) {
         winInfo := ClipWins[hwnd]
-        for _, bmp in winInfo.UndoStack {
-            Gdip_DisposeImage(bmp)
+        try {
+            for _, bmp in winInfo.UndoStack
+                try Gdip_DisposeImage(bmp)
+            try Gdip_DisposeImage(winInfo.pBitmap)
+            ClipWins.Delete(hwnd)
         }
-        Gdip_DisposeImage(winInfo.pBitmap)
-        ClipWins.Delete(hwnd)
     }
-    guiObj.Destroy()
+    try guiObj.Destroy()
     UpdateTrayTip()
 }
 
 UpdateTrayTip() {
+    global APP_NAME
     cnt := ClipWins.Count
-    A_IconTip := "Screen Clip Tool" . (cnt > 0 ? " (" cnt " clip" (cnt > 1 ? "s" : "") ")" : "")
+    A_IconTip := APP_NAME . (cnt > 0 ? " (" cnt " clip" (cnt > 1 ? "s" : "") ")" : "")
 }
 
 WM_LBUTTONDOWN(wParam, lParam, msg, hwnd) {
-    global AboutHwnd, ANNOTATION_MODE, ANNOTATION_TARGET_HWND
-    if (AboutHwnd && hwnd == AboutHwnd) {
-        PostMessage 0xA1, 2, , , "ahk_id " hwnd
-        return
-    }
+    global ANNOTATION_MODE, ANNOTATION_TARGET_HWND
     if !ClipWins.Has(hwnd)
         return
 
@@ -788,9 +1100,11 @@ WM_LBUTTONDOWN(wParam, lParam, msg, hwnd) {
         return
     }
 
-    ; --- 그리기 모드 (Shift: 빨간 네모, Ctrl: 노랑 형광펜, Alt: 초록 형광펜) ---
+    ; --- Drawing modes (Shift: red box, Ctrl: yellow highlight, Alt: green highlight, Shift+Ctrl: text markup) ---
     if GetKeyState("Shift", "P") || GetKeyState("Ctrl", "P") || GetKeyState("Alt", "P") {
-        if GetKeyState("Shift", "P")
+        if GetKeyState("Shift", "P") && GetKeyState("Ctrl", "P")
+            SCW_ApplyAnnotation(hwnd, "Text")
+        else if GetKeyState("Shift", "P")
             SCW_ApplyAnnotation(hwnd, "Red")
         else if GetKeyState("Ctrl", "P") {
             SCW_ApplyAnnotation(hwnd, "Yellow")
@@ -801,12 +1115,12 @@ WM_LBUTTONDOWN(wParam, lParam, msg, hwnd) {
     isDoubleClick := (msg == 0x0203) || (hwnd == LastClickHwnd && A_TickCount - LastClickTime < DllCall(
         "GetDoubleClickTime"))
 
-    ; 더블 클릭 감지
+    ; Detect double-click.
     if isDoubleClick {
-        LastClickTime := 0 ; 초기화
+        LastClickTime := 0 ; Reset
 
         if winInfo.IsMinimized {
-            ; 원래 크기로 복구
+            ; Restore original size.
             WinMove(winInfo.orgX, winInfo.orgY, winInfo.w + BORDER_WIDTH * 2, winInfo.h + BORDER_WIDTH * 2, hwnd)
             WinSetTransparent("Off", hwnd)
             winInfo.NumText.Visible := false
@@ -817,8 +1131,8 @@ WM_LBUTTONDOWN(wParam, lParam, msg, hwnd) {
             winInfo.orgX := oX
             winInfo.orgY := oY
             WinMove(, , MINI_SIZE, MINI_SIZE, hwnd)
-            WinSetTransparent(MINI_OPACITY, hwnd) ; 50% 투명도로 설정
-            winInfo.NumBg.Visible := true ; 검정 배경 살짝 노출
+            WinSetTransparent(MINI_OPACITY, hwnd) ; Set 50% opacity.
+            winInfo.NumBg.Visible := true ; Show the black background slightly.
             winInfo.NumText.Visible := true
             winInfo.NumText.Redraw()
             winInfo.IsMinimized := true
@@ -838,9 +1152,28 @@ SCW_ApplyAnnotation(hwnd, mode) {
         return
 
     winInfo := ClipWins[hwnd]
-    WinGetPos(&winX, &winY, , , "ahk_id " hwnd)
+    try WinGetPos(&winX, &winY, , , "ahk_id " hwnd)
+    catch
+        return
 
-    if (mode == "Red")
+    if (mode == "Text") {
+        ; Capture mouse position before opening InputBox
+        CoordMode("Mouse", "Screen")
+        MouseGetPos(&clickX, &clickY)
+
+        ; Prevent dialog from opening behind the always-on-top window
+        winInfo.gui.Opt("+OwnDialogs")
+
+        ; Calculate position near the mouse
+        pos := GetPopupPositionNearMouse(320, 130)
+
+        ; Prompt for text annotation
+        ib := InputBox("Enter the text to display on the image:`n(The text will be printed in red at the clicked location)", "Add Text Annotation", "X" pos.x " Y" pos.y " w320 h130")
+        if (ib.Result != "OK" || ib.Value == "")
+            return
+        textVal := ib.Value
+    }
+    else if (mode == "Red")
         rect := DrawRectPreview("Red")
     else if (mode == "Yellow")
         rect := DrawRectPreview("Yellow", false)
@@ -849,38 +1182,74 @@ SCW_ApplyAnnotation(hwnd, mode) {
     else
         return
 
-    if (rect.w <= 0 || rect.h <= 0)
+    if (mode != "Text" && (rect.w <= 0 || rect.h <= 0))
         return
 
-    clone := Gdip_CloneBitmapArea(winInfo.pBitmap, 0, 0, winInfo.w, winInfo.h)
-    winInfo.UndoStack.Push(clone)
-    if (winInfo.UndoStack.Length > UNDO_MAX) {
-        oldest := winInfo.UndoStack.RemoveAt(1)
-        Gdip_DisposeImage(oldest)
+    clone := 0, pGraphics := 0, pPen := 0, pBrush := 0, hBitmap := 0
+    try {
+        clone := Gdip_CloneBitmapArea(winInfo.pBitmap, 0, 0, winInfo.w, winInfo.h)
+        if !clone
+            throw Error("Could not create undo image")
+
+        if (mode == "Text") {
+            rectX := clickX - (winX + BORDER_WIDTH)
+            rectY := clickY - (winY + BORDER_WIDTH)
+        } else {
+            rectX := rect.x - (winX + BORDER_WIDTH)
+            rectY := rect.y - (winY + BORDER_WIDTH)
+        }
+
+        pGraphics := Gdip_GraphicsFromImage(winInfo.pBitmap)
+        if !pGraphics
+            throw Error("Could not prepare drawing surface")
+
+        if (mode == "Text") {
+            status := Gdip_TextToGraphics(pGraphics, textVal, "x" rectX " y" rectY " cFFFF0000 s14 Bold", "Arial", winInfo.w - rectX, winInfo.h - rectY)
+            if (status < 0)
+                throw Error("Gdip_TextToGraphics failed with status " status)
+        } else if (mode == "Red") {
+            pPen := Gdip_CreatePen("0xFFFF0000", BORDER_WIDTH)
+            if !pPen
+                throw Error("Could not create pen")
+            Gdip_DrawRectangle(pGraphics, pPen, rectX, rectY, rect.w, rect.h)
+        } else if (mode == "Yellow") {
+            pBrush := Gdip_BrushCreateSolid("0x77FFFF00")
+            if !pBrush
+                throw Error("Could not create brush")
+            Gdip_FillRectangle(pGraphics, pBrush, rectX, rectY, rect.w, rect.h)
+        } else if (mode == "Green") {
+            pBrush := Gdip_BrushCreateSolid("0x7700FF00")
+            if !pBrush
+                throw Error("Could not create brush")
+            Gdip_FillRectangle(pGraphics, pBrush, rectX, rectY, rect.w, rect.h)
+        }
+
+        hBitmap := Gdip_CreateHBITMAPFromBitmap(winInfo.pBitmap)
+        if !hBitmap
+            throw Error("Could not refresh image")
+        winInfo.picCtrl.Value := "HBITMAP:*" hBitmap
+
+        winInfo.UndoStack.Push(clone)
+        clone := 0
+        if (winInfo.UndoStack.Length > UNDO_MAX) {
+            oldest := winInfo.UndoStack.RemoveAt(1)
+            try Gdip_DisposeImage(oldest)
+        }
+    } catch as e {
+        ToolTip("⚠️ 주석 그리기 실패: " ShortErrorMessage(e.Message) "`r`n⚠️ Annotation failed.")
+        SetTimer(() => ToolTip(), -2500)
+    } finally {
+        if pPen
+            Gdip_DeletePen(pPen)
+        if pBrush
+            Gdip_DeleteBrush(pBrush)
+        if pGraphics
+            Gdip_DeleteGraphics(pGraphics)
+        if hBitmap
+            DllCall("DeleteObject", "ptr", hBitmap)
+        if clone
+            Gdip_DisposeImage(clone)
     }
-
-    rectX := rect.x - (winX + BORDER_WIDTH)
-    rectY := rect.y - (winY + BORDER_WIDTH)
-    pGraphics := Gdip_GraphicsFromImage(winInfo.pBitmap)
-
-    if (mode == "Red") {
-        pPen := Gdip_CreatePen("0xFFFF0000", BORDER_WIDTH)
-        Gdip_DrawRectangle(pGraphics, pPen, rectX, rectY, rect.w, rect.h)
-        Gdip_DeletePen(pPen)
-    } else if (mode == "Yellow") {
-        pBrush := Gdip_BrushCreateSolid("0x77FFFF00")
-        Gdip_FillRectangle(pGraphics, pBrush, rectX, rectY, rect.w, rect.h)
-        Gdip_DeleteBrush(pBrush)
-    } else if (mode == "Green") {
-        pBrush := Gdip_BrushCreateSolid("0x7700FF00")
-        Gdip_FillRectangle(pGraphics, pBrush, rectX, rectY, rect.w, rect.h)
-        Gdip_DeleteBrush(pBrush)
-    }
-    Gdip_DeleteGraphics(pGraphics)
-
-    hBitmap := Gdip_CreateHBITMAPFromBitmap(winInfo.pBitmap)
-    winInfo.picCtrl.Value := "HBITMAP:*" hBitmap
-    DllCall("DeleteObject", "ptr", hBitmap)
 }
 
 StartAnnotationMode(mode) {
@@ -891,7 +1260,10 @@ StartAnnotationMode(mode) {
     ANNOTATION_MODE := mode
     ANNOTATION_TARGET_HWND := RightClickedHwnd
     WinActivate("ahk_id " ANNOTATION_TARGET_HWND)
-    ToolTip("📝 마우스로 영역을 드래그하세요.`r`n📝 Drag an area on the clip.")
+    if (mode == "Text")
+        ToolTip("✍️ 주석을 추가할 위치를 마우스로 클릭하세요.`r`n✍️ Click on the clip to add text.")
+    else
+        ToolTip("📝 마우스로 영역을 드래그하세요.`r`n📝 Drag an area on the clip.")
     SetTimer(ClearAnnotationMode, 0)
     SetTimer(ClearAnnotationMode, -10000)
 }
@@ -908,26 +1280,7 @@ SCW_Win2Clipboard() {
     if !ClipWins.Has(hwnd)
         return
 
-    pBitmap := ClipWins[hwnd].pBitmap
-    w := Gdip_GetImageWidth(pBitmap)
-    h := Gdip_GetImageHeight(pBitmap)
-
-    if (CLIP_SCALE != 1.0) {
-        pScaled := ResizeBitmap(pBitmap, CLIP_SCALE)
-        pBordered := AddBorderToBitmap(pScaled)
-        Gdip_DisposeImage(pScaled)
-    } else {
-        pBordered := AddBorderToBitmap(pBitmap)
-    }
-
-    Gdip_SetBitmapToClipboard(pBordered)
-
-    finalW := Gdip_GetImageWidth(pBordered)
-    finalH := Gdip_GetImageHeight(pBordered)
-    Gdip_DisposeImage(pBordered)
-
-    ToolTip("✅ 캡처 완료 (" finalW "×" finalH ") + 클립보드 복사`r`n✅ Copied to clipboard (" finalW "x" finalH ")")
-    SetTimer(() => ToolTip(), -2000)
+    CopyBitmapToClipboard(ClipWins[hwnd].pBitmap)
 }
 
 SCW_Win2File() {
@@ -935,14 +1288,83 @@ SCW_Win2File() {
     if !ClipWins.Has(hwnd)
         return
 
-    pBitmap := ClipWins[hwnd].pBitmap
-    pBordered := AddBorderToBitmap(pBitmap)
-    TodayDate := FormatTime(, "yyyy-MM-dd_HHmmss")
-    FileOut := A_Desktop "\" TodayDate ".PNG"
-    Gdip_SaveBitmapToFile(pBordered, FileOut)
-    Gdip_DisposeImage(pBordered)
-    ToolTip("✅ 바탕화면에 저장 완료`r`n✅ Saved to Desktop:`r`n" FileOut)
-    SetTimer(() => ToolTip(), -3000)
+    SaveBitmapToDesktop(ClipWins[hwnd].pBitmap)
+}
+
+CopyBitmapToClipboard(pBitmap) {
+    global CLIP_SCALE
+    pBordered := 0
+    pScaled := 0
+    try {
+        if !pBitmap
+            throw Error("Invalid bitmap")
+
+        if (CLIP_SCALE != 1.0) {
+            pScaled := ResizeBitmap(pBitmap, CLIP_SCALE)
+            if !pScaled
+                throw Error("Could not resize image")
+            pBordered := AddBorderToBitmap(pScaled)
+        } else {
+            pBordered := AddBorderToBitmap(pBitmap)
+        }
+        if !pBordered
+            throw Error("Could not prepare image")
+
+        Gdip_SetBitmapToClipboard(pBordered)
+        finalW := Gdip_GetImageWidth(pBordered)
+        finalH := Gdip_GetImageHeight(pBordered)
+        ToolTip("✅ 캡처 완료 (" finalW "×" finalH ") + 클립보드 복사`r`n✅ Copied to clipboard (" finalW "x" finalH ")")
+        SetTimer(() => ToolTip(), -2000)
+    } catch as e {
+        ToolTip("⚠️ 클립보드 복사 실패: " ShortErrorMessage(e.Message) "`r`n⚠️ Copy to clipboard failed.")
+        SetTimer(() => ToolTip(), -3500)
+    } finally {
+        if pScaled
+            Gdip_DisposeImage(pScaled)
+        if pBordered
+            Gdip_DisposeImage(pBordered)
+    }
+}
+
+SaveBitmapToDesktop(pBitmap) {
+    pBordered := 0
+    try {
+        if !pBitmap
+            throw Error("Invalid bitmap")
+        pBordered := AddBorderToBitmap(pBitmap)
+        if !pBordered
+            throw Error("Could not prepare image")
+        TodayDate := FormatTime(, "yyyy-MM-dd_HHmmss")
+        FileOut := A_Desktop "\" TodayDate ".PNG"
+        if !SafeSaveBitmapToFile(pBordered, FileOut)
+            throw Error("Could not save PNG file")
+        ToolTip("✅ 바탕화면에 저장 완료`r`n✅ Saved to Desktop:`r`n" FileOut)
+        SetTimer(() => ToolTip(), -3000)
+    } catch as e {
+        ToolTip("⚠️ 바탕화면 저장 실패: " ShortErrorMessage(e.Message) "`r`n⚠️ Save to Desktop failed.")
+        SetTimer(() => ToolTip(), -3500)
+    } finally {
+        if pBordered
+            Gdip_DisposeImage(pBordered)
+    }
+}
+
+CopyBitmapToPaint(pBitmap) {
+    global TEMP_FILES
+    try {
+        if !pBitmap
+            throw Error("Invalid bitmap")
+        tempFile := A_Temp "\clipocr_pro_paint_" A_Now "_" A_TickCount ".png"
+        if !SafeSaveBitmapToFile(pBitmap, tempFile)
+            throw Error("Could not save temporary image")
+        TEMP_FILES.Push(tempFile)
+        Run("mspaint.exe `"" tempFile "`"")
+    } catch as e {
+        if IsSet(tempFile)
+            try FileDelete(tempFile)
+        ToolTip("⚠️ Paint 실행 실패: " ShortErrorMessage(e.Message) "`r`n⚠️ Could not open Paint.")
+        SetTimer(() => ToolTip(), -3500)
+    }
 }
 
 SCW_Undo(targetHwnd := 0) {
@@ -977,9 +1399,9 @@ WM_RBUTTONDOWN(wParam, lParam, msg, hwnd) {
     global RightClickedHwnd := hwnd
 
     if (ClipWins[hwnd].UndoStack.Length > 0)
-        ClipMenu.Enable("↩️ 5. Undo Draw (Ctrl+Z)")
+        ClipMenu.Enable("↩️ 6. Undo Draw (Ctrl+Z)")
     else
-        ClipMenu.Disable("↩️ 5. Undo Draw (Ctrl+Z)")
+        ClipMenu.Disable("↩️ 6. Undo Draw (Ctrl+Z)")
 
     ClipMenu.Show()
 }
@@ -1000,50 +1422,45 @@ MenuHandler(ItemName, ItemPos, MyMenu) {
     else if InStr(ItemName, "Green Highlight") {
         StartAnnotationMode("Green")
     }
+    else if InStr(ItemName, "Text Markup") {
+        StartAnnotationMode("Text")
+    }
     else if InStr(ItemName, "Copy To Paint") {
-        tempFile := A_Temp "\temp_clip.png"
-        Gdip_SaveBitmapToFile(pBitmap, tempFile)
-        Run("mspaint.exe `"" tempFile "`"")
+        CopyBitmapToPaint(pBitmap)
     }
     else if InStr(ItemName, "Save to Desktop") {
-        pBordered := AddBorderToBitmap(pBitmap)
-        TodayDate := FormatTime(, "yyyy-MM-dd_HHmmss")
-        FileOut := A_Desktop "\" TodayDate ".PNG"
-        Gdip_SaveBitmapToFile(pBordered, FileOut)
-        Gdip_DisposeImage(pBordered)
-        ToolTip("✅ 바탕화면에 저장 완료`r`n✅ Saved to Desktop:`r`n" FileOut)
-        SetTimer(() => ToolTip(), -3000)
+        SaveBitmapToDesktop(pBitmap)
     }
     else if InStr(ItemName, "Copy to Clipboard") {
-        if (CLIP_SCALE != 1.0) {
-            pScaled := ResizeBitmap(pBitmap, CLIP_SCALE)
-            pBordered := AddBorderToBitmap(pScaled)
-            Gdip_DisposeImage(pScaled)
-        } else {
-            pBordered := AddBorderToBitmap(pBitmap)
-        }
-        Gdip_SetBitmapToClipboard(pBordered)
-        finalW := Gdip_GetImageWidth(pBordered)
-        finalH := Gdip_GetImageHeight(pBordered)
-        Gdip_DisposeImage(pBordered)
-        ToolTip("✅ 캡처 완료 (" finalW "×" finalH ") + 클립보드 복사`r`n✅ Copied to clipboard (" finalW "x" finalH ")")
-        SetTimer(() => ToolTip(), -2000)
+        CopyBitmapToClipboard(pBitmap)
     }
     else if InStr(ItemName, "Undo Draw") {
         SCW_Undo(RightClickedHwnd)
     }
 }
 
-; ── 이미지 테두리 추가 헬퍼 (클립보드/저장 시 1px 검정 실선) ──
+; ── Image-border helper for clipboard/save output (1px solid black) ──
 AddBorderToBitmap(pBitmap) {
+    if !pBitmap
+        return 0
     w := Gdip_GetImageWidth(pBitmap)
     h := Gdip_GetImageHeight(pBitmap)
+    if (w <= 0 || h <= 0)
+        return 0
     pNew := Gdip_CreateBitmap(w, h)
+    if !pNew
+        return 0
     pGraphics := Gdip_GraphicsFromImage(pNew)
+    if !pGraphics {
+        Gdip_DisposeImage(pNew)
+        return 0
+    }
     Gdip_DrawImage(pGraphics, pBitmap, 0, 0, w, h)
     pPen := Gdip_CreatePen("0xFF000000", 1)
-    Gdip_DrawRectangle(pGraphics, pPen, 0, 0, w - 1, h - 1)
-    Gdip_DeletePen(pPen)
+    if pPen {
+        Gdip_DrawRectangle(pGraphics, pPen, 0, 0, w - 1, h - 1)
+        Gdip_DeletePen(pPen)
+    }
     Gdip_DeleteGraphics(pGraphics)
     return pNew
 }
@@ -1063,27 +1480,42 @@ UriEncode(Uri) {
     return Res
 }
 
-; ── 클립보드 이미지 리사이징 헬퍼 ──
+; ── Clipboard image resize helper ──
 ResizeBitmap(pBitmap, scale) {
+    if !pBitmap
+        return 0
+    scale := NormalizeClipScale(scale)
     w := Gdip_GetImageWidth(pBitmap)
     h := Gdip_GetImageHeight(pBitmap)
+    if (w <= 0 || h <= 0)
+        return 0
     newW := Round(w * scale)
     newH := Round(h * scale)
+    if (newW <= 0 || newH <= 0)
+        return 0
 
     pNew := Gdip_CreateBitmap(newW, newH)
+    if !pNew
+        return 0
     pGraphics := Gdip_GraphicsFromImage(pNew)
+    if !pGraphics {
+        Gdip_DisposeImage(pNew)
+        return 0
+    }
     Gdip_SetInterpolationMode(pGraphics, 7) ; 7 = HighQualityBicubic
     Gdip_DrawImage(pGraphics, pBitmap, 0, 0, newW, newH, 0, 0, w, h)
     Gdip_DeleteGraphics(pGraphics)
     return pNew
 }
 
-; ── 스케일 메뉴 업데이트 및 저장 ──
+; ── Scale-menu update and persistence ──
 SetClipScale(scale) {
     global CLIP_SCALE, REG_PATH
+    scale := NormalizeClipScale(scale)
     CLIP_SCALE := scale
-    RegWrite(String(scale), "REG_SZ", REG_PATH, "Scale")
+    saved := SafeRegWriteString(scale, REG_PATH, "Scale")
     UpdateScaleMenu()
+    return saved
 }
 
 UpdateScaleMenu() {
@@ -1130,57 +1562,12 @@ GetScaleFromLabel(label) {
 }
 
 GetTextTranslateLangOptions() {
-    return [
-        { label: "한국어 (ko)", code: "ko" },
-        { label: "영어 (en)", code: "en" },
-        { label: "폴란드어 (pl)", code: "pl" },
-        { label: "알바니아어 (sq)", code: "sq" },
-        { label: "아르메니아어 (hy)", code: "hy" },
-        { label: "아제르바이잔어 (az)", code: "az" },
-        { label: "바스크어 (eu)", code: "eu" },
-        { label: "벨라루스어 (be)", code: "be" },
-        { label: "보스니아어 (bs)", code: "bs" },
-        { label: "불가리아어 (bg)", code: "bg" },
-        { label: "카탈루냐어 (ca)", code: "ca" },
-        { label: "코르시카어 (co)", code: "co" },
-        { label: "크로아티아어 (hr)", code: "hr" },
-        { label: "체코어 (cs)", code: "cs" },
-        { label: "덴마크어 (da)", code: "da" },
-        { label: "네덜란드어 (nl)", code: "nl" },
-        { label: "에스페란토 (eo)", code: "eo" },
-        { label: "에스토니아어 (et)", code: "et" },
-        { label: "핀란드어 (fi)", code: "fi" },
-        { label: "프랑스어 (fr)", code: "fr" },
-        { label: "프리지아어 (fy)", code: "fy" },
-        { label: "갈리시아어 (gl)", code: "gl" },
-        { label: "조지아어 (ka)", code: "ka" },
-        { label: "독일어 (de)", code: "de" },
-        { label: "그리스어 (el)", code: "el" },
-        { label: "헝가리어 (hu)", code: "hu" },
-        { label: "아이슬란드어 (is)", code: "is" },
-        { label: "아일랜드어 (ga)", code: "ga" },
-        { label: "이탈리아어 (it)", code: "it" },
-        { label: "라틴어 (la)", code: "la" },
-        { label: "라트비아어 (lv)", code: "lv" },
-        { label: "리투아니아어 (lt)", code: "lt" },
-        { label: "룩셈부르크어 (lb)", code: "lb" },
-        { label: "마케도니아어 (mk)", code: "mk" },
-        { label: "몰타어 (mt)", code: "mt" },
-        { label: "노르웨이어 (no)", code: "no" },
-        { label: "포르투갈어 (pt)", code: "pt" },
-        { label: "루마니아어 (ro)", code: "ro" },
-        { label: "러시아어 (ru)", code: "ru" },
-        { label: "스코틀랜드 게일어 (gd)", code: "gd" },
-        { label: "세르비아어 (sr)", code: "sr" },
-        { label: "슬로바키아어 (sk)", code: "sk" },
-        { label: "슬로베니아어 (sl)", code: "sl" },
-        { label: "스페인어 (es)", code: "es" },
-        { label: "스웨덴어 (sv)", code: "sv" },
-        { label: "튀르키예어 (tr)", code: "tr" },
-        { label: "우크라이나어 (uk)", code: "uk" },
-        { label: "웨일스어 (cy)", code: "cy" },
-        { label: "이디시어 (yi)", code: "yi" }
-    ]
+    static options := 0
+    if !options {
+        options := [{ label: "Korean (ko)", code: "ko" }, { label: "English (en)", code: "en" }, { label: "Polish (pl)", code: "pl" }, { label: "Albanian (sq)", code: "sq" }, { label: "Armenian (hy)", code: "hy" }, { label: "Azerbaijani (az)", code: "az" }, { label: "Basque (eu)", code: "eu" }, { label: "Belarusian (be)", code: "be" }, { label: "Bosnian (bs)", code: "bs" }, { label: "Bulgarian (bg)", code: "bg" }, { label: "Catalan (ca)", code: "ca" }, { label: "Corsican (co)", code: "co" }, { label: "Croatian (hr)", code: "hr" }, { label: "Czech (cs)", code: "cs" }, { label: "Danish (da)", code: "da" }, { label: "Dutch (nl)", code: "nl" }, { label: "Esperanto (eo)", code: "eo" }, { label: "Estonian (et)", code: "et" }, { label: "Finnish (fi)", code: "fi" }, { label: "French (fr)", code: "fr" }, { label: "Frisian (fy)", code: "fy" }, { label: "Galician (gl)", code: "gl" }, { label: "Georgian (ka)", code: "ka" }, { label: "German (de)", code: "de" }, { label: "Greek (el)", code: "el" }, { label: "Hungarian (hu)", code: "hu" }, { label: "Icelandic (is)", code: "is" }, { label: "Irish (ga)", code: "ga" }, { label: "Italian (it)", code: "it" }, { label: "Latin (la)", code: "la" }, { label: "Latvian (lv)", code: "lv" }, { label: "Lithuanian (lt)", code: "lt" }, { label: "Luxembourgish (lb)", code: "lb" }, { label: "Macedonian (mk)", code: "mk" }, { label: "Maltese (mt)", code: "mt" }, { label: "Norwegian (no)", code: "no" }, { label: "Portuguese (pt)", code: "pt" }, { label: "Romanian (ro)", code: "ro" }, { label: "Russian (ru)", code: "ru" }, { label: "Scots Gaelic (gd)", code: "gd" }, { label: "Serbian (sr)", code: "sr" }, { label: "Slovak (sk)", code: "sk" }, { label: "Slovenian (sl)", code: "sl" }, { label: "Spanish (es)", code: "es" }, { label: "Swedish (sv)", code: "sv" }, { label: "Turkish (tr)", code: "tr" }, { label: "Ukrainian (uk)", code: "uk" }, { label: "Welsh (cy)", code: "cy" }, { label: "Yiddish (yi)", code: "yi" }
+        ]
+    }
+    return options.Clone()
 }
 
 GetTextTranslateLangLabels() {
@@ -1219,16 +1606,18 @@ SetTextTranslateLang(lang) {
     if !IsTextTranslateLangSupported(lang)
         lang := "ko"
     TEXT_TRANSLATE_LANG := lang
-    RegWrite(lang, "REG_SZ", REG_PATH, "TranslateLang")
+    return SafeRegWriteString(lang, REG_PATH, "TranslateLang")
+}
+
+SetTextTranslateFontSize(fontSize) {
+    global TEXT_TRANSLATE_FONT_SIZE, REG_PATH
+    fontSize := NormalizeTextTranslateFontSize(fontSize)
+    TEXT_TRANSLATE_FONT_SIZE := fontSize
+    return SafeRegWriteString(fontSize, REG_PATH, "TextTranslateFontSize")
 }
 
 GetTextTranslateHotkeyOptions() {
-    return [
-        { label: "Win + CapsLock", hotkey: "#CapsLock" },
-        { label: "Win + Shift + CapsLock", hotkey: "#+CapsLock" },
-        { label: "Win + Alt + CapsLock", hotkey: "#!CapsLock" },
-        { label: "Ctrl + Alt + CapsLock", hotkey: "^!CapsLock" },
-        { label: "Ctrl + Shift + CapsLock", hotkey: "^+CapsLock" }
+    return [{ label: "Win + CapsLock", hotkey: "#CapsLock" }, { label: "Win + Shift + CapsLock", hotkey: "#+CapsLock" }, { label: "Win + Alt + CapsLock", hotkey: "#!CapsLock" }, { label: "Ctrl + Alt + CapsLock", hotkey: "^!CapsLock" }, { label: "Ctrl + Shift + CapsLock", hotkey: "^+CapsLock" }
     ]
 }
 
@@ -1273,7 +1662,7 @@ GetTextTranslateHotkeyByLabel(label) {
 
 ApplyTextTranslateHotkey() {
     global TEXT_TRANSLATE_HOTKEY
-    ; Win+CapsLock은 정적 단축키로 항상 등록되어 있으므로, 사용자가 다른 단축키를 고른 경우만 추가 등록한다.
+    ; Win+CapsLock is always registered as a static hotkey, so add only user-selected alternatives.
     if (TEXT_TRANSLATE_HOTKEY == "#CapsLock")
         return
     try {
@@ -1297,8 +1686,9 @@ SetTextTranslateHotkey(hotkey) {
         ApplyTextTranslateHotkey()
     }
 
-    RegWrite(hotkey, "REG_SZ", REG_PATH, "TranslateHotkey")
+    saved := SafeRegWriteString(hotkey, REG_PATH, "TranslateHotkey")
     UpdateTrayTextTranslateMenuLabel()
+    return saved
 }
 
 UpdateTrayTextTranslateMenuLabel() {
@@ -1308,57 +1698,344 @@ UpdateTrayTextTranslateMenuLabel() {
     TRAY_TEXT_TRANSLATE_ITEM := newItem
 }
 
-ShowSettingsDialog() {
-    global SettingsHwnd, CLIP_SCALE, TEXT_TRANSLATE_LANG, TEXT_TRANSLATE_HOTKEY
+SwitchDashboardPanel(tabIndex, TabGenBtn, TabTrnBtn, TabAbtBtn, GenPanel, TrnPanel, AbtPanel) {
+    TabGenBtn.Opt("cGray +BackgroundTrans")
+    TabGenBtn.Redraw()
+    TabTrnBtn.Opt("cGray +BackgroundTrans")
+    TabTrnBtn.Redraw()
+    TabAbtBtn.Opt("cGray +BackgroundTrans")
+    TabAbtBtn.Redraw()
 
-    if (SettingsHwnd && WinExist("ahk_id " SettingsHwnd)) {
-        WinActivate("ahk_id " SettingsHwnd)
+    for ctrl in GenPanel
+        ctrl.Visible := false
+    for ctrl in TrnPanel
+        ctrl.Visible := false
+    for ctrl in AbtPanel
+        ctrl.Visible := false
+
+    if (tabIndex == 1) {
+        TabGenBtn.Opt("cWhite -BackgroundTrans Background3F3F46")
+        TabGenBtn.Redraw()
+        for ctrl in GenPanel
+            ctrl.Visible := true
+    } else if (tabIndex == 2) {
+        TabTrnBtn.Opt("cWhite -BackgroundTrans Background3F3F46")
+        TabTrnBtn.Redraw()
+        for ctrl in TrnPanel
+            ctrl.Visible := true
+    } else if (tabIndex == 3) {
+        TabAbtBtn.Opt("cWhite -BackgroundTrans Background3F3F46")
+        TabAbtBtn.Redraw()
+        for ctrl in AbtPanel
+            ctrl.Visible := true
+    }
+}
+
+SaveDashboardSettings(StartupChk, ScaleCombo, FontSizeEdit, HotkeyCombo, LangCombo, LV_ImageLangs) {
+    global IMAGE_TRANSLATE_LANGS, REG_PATH
+    settingsSaved := true
+
+    if StartupChk.Value {
+        if !EnableStartup()
+            settingsSaved := false
+    } else {
+        if !DisableStartup()
+            settingsSaved := false
+    }
+
+    if !SetClipScale(GetScaleFromLabel(ScaleCombo.Text))
+        settingsSaved := false
+    if !SetTextTranslateFontSize(FontSizeEdit.Value)
+        settingsSaved := false
+    if !SetTextTranslateHotkey(GetTextTranslateHotkeyByLabel(HotkeyCombo.Text))
+        settingsSaved := false
+    if !SetTextTranslateLang(GetTextTranslateLangCodeByLabel(LangCombo.Text))
+        settingsSaved := false
+
+    selectedCodes := []
+    row := 0
+    Loop {
+        row := LV_ImageLangs.GetNext(row, "Checked")
+        if not row
+            break
+        label := LV_ImageLangs.GetText(row)
+        selectedCodes.Push(GetTextTranslateLangCodeByLabel(label))
+    }
+
+    newImageLangs := ""
+    for i, code in selectedCodes
+        newImageLangs .= (i == 1 ? "" : ",") code
+    IMAGE_TRANSLATE_LANGS := NormalizeLangCodeList(newImageLangs)
+    if !SafeRegWriteString(IMAGE_TRANSLATE_LANGS, REG_PATH, "ImageTranslateLangs")
+        settingsSaved := false
+    UpdateImageTranslateMenu()
+
+    return settingsSaved
+}
+
+ShowDashboardDialog() {
+    global APP_NAME, APP_VERSION, DashboardHwnd, CLIP_SCALE, TEXT_TRANSLATE_LANG, TEXT_TRANSLATE_HOTKEY, TEXT_TRANSLATE_FONT_SIZE, IMAGE_TRANSLATE_LANGS, bmcBtnPath
+
+    if (DashboardHwnd && WinExist("ahk_id " DashboardHwnd)) {
+        WinActivate("ahk_id " DashboardHwnd)
         return
     }
 
-    SettingsGui := Gui("+AlwaysOnTop +ToolWindow +Border -DPIScale", "Settings")
-    SettingsGui.BackColor := "1E1E24"
-    SettingsGui.SetFont("s9", "Segoe UI")
+    DashGui := Gui("-Caption +AlwaysOnTop +ToolWindow +Border -DPIScale", APP_NAME " Settings")
+    DashGui.BackColor := "1E1E24"
+    DashGui.SetFont("s9", "Segoe UI")
 
-    Tab := SettingsGui.Add("Tab3", "x12 y12 w496 h300", ["기본값"])
-    Tab.UseTab(1)
+    ; --- Title bar ---
+    DashGui.Add("Text", "x0 y0 w780 h45 Background141416", "")
+    TitleTxt := DashGui.Add("Text", "x15 y12 w350 h25 +BackgroundTrans cWhite", "⚙️ " APP_NAME " Settings")
+    TitleTxt.SetFont("s11 Bold", "Segoe UI")
+    CloseBtn := DashGui.Add("Text", "x745 y10 w25 h25 Center +0x200 +BackgroundTrans cGray", "×")
+    CloseBtn.SetFont("s16 Bold")
 
-    SettingsGui.Add("Text", "x32 y55 w420 h22 +BackgroundTrans cFFFFFF", "이미지 붙여넣기 기본값")
-    SettingsGui.Add("Text", "x32 y84 w180 h22 +BackgroundTrans cCCCCCC", "클립보드 이미지 크기")
-    ScaleCombo := SettingsGui.Add("DropDownList", "x220 y80 w150 Choose" GetScaleIndex(CLIP_SCALE), GetScaleLabels())
+    DestroyDash(*) {
+        global DashboardHwnd := 0
+        DashGui.Destroy()
+    }
+    CloseBtn.OnEvent("Click", DestroyDash)
 
-    SettingsGui.Add("Text", "x32 y130 w420 h22 +BackgroundTrans cFFFFFF", "선택 텍스트 번역 기본값")
-    SettingsGui.Add("Text", "x32 y160 w180 h22 +BackgroundTrans cCCCCCC", "번역 단축키")
-    HotkeyCombo := SettingsGui.Add("DropDownList", "x220 y156 w220 Choose" GetTextTranslateHotkeyIndex(TEXT_TRANSLATE_HOTKEY),
-        GetTextTranslateHotkeyLabels())
+    ; --- Left sidebar ---
+    DashGui.Add("Text", "x0 y45 w160 h455 Background27272A", "") ; Sidebar background
 
-    SettingsGui.Add("Text", "x32 y202 w180 h22 +BackgroundTrans cCCCCCC", "번역 결과 언어")
-    LangCombo := SettingsGui.Add("DropDownList", "x220 y198 w220 Choose" GetTextTranslateLangIndex(TEXT_TRANSLATE_LANG),
-        GetTextTranslateLangLabels())
+    ; Tab buttons
+    TabGenBtn := DashGui.Add("Text", "x10 y60 w140 h40 +0x200 Center +BackgroundTrans cWhite Background3F3F46", "⚙️ General")
+    TabGenBtn.SetFont("s10 Bold", "Segoe UI")
 
-    SaveBtn := SettingsGui.Add("Button", "x304 y326 w90 h30", "저장")
-    CloseBtn := SettingsGui.Add("Button", "x404 y326 w90 h30", "닫기")
+    TabTrnBtn := DashGui.Add("Text", "x10 y110 w140 h40 +0x200 Center +BackgroundTrans cGray", "🌐 Translation")
+    TabTrnBtn.SetFont("s10 Bold", "Segoe UI")
 
-    SaveSettings(*) {
-        SetClipScale(GetScaleFromLabel(ScaleCombo.Text))
-        SetTextTranslateHotkey(GetTextTranslateHotkeyByLabel(HotkeyCombo.Text))
-        SetTextTranslateLang(GetTextTranslateLangCodeByLabel(LangCombo.Text))
-        ToolTip("✅ 설정 저장 완료`r`n✅ Settings saved.")
+    TabAbtBtn := DashGui.Add("Text", "x10 y160 w140 h40 +0x200 Center +BackgroundTrans cGray", "ℹ️ About")
+    TabAbtBtn.SetFont("s10 Bold", "Segoe UI")
+
+    ManualBtn := DashGui.Add("Text", "x10 y450 w140 h32 BackgroundFFDD00 c1E1E24 Center +0x200", "📖 Manual")
+    ManualBtn.SetFont("s10 Bold", "Segoe UI")
+    ManualBtn.OnEvent("Click", (*) => ShowManualDialog())
+
+    ; --- Right content container ---
+
+    ; 1. General Panel
+    GenPanel := []
+    lbl1 := DashGui.Add("Text", "x180 y60 w580 h22 +BackgroundTrans cFFFFFF", "Image Paste Default")
+    lbl1.SetFont("s10 Bold")
+    GenPanel.Push(lbl1)
+
+    GenPanel.Push(DashGui.Add("Text", "x180 y94 w180 h22 +BackgroundTrans cCCCCCC", "Clipboard Image Size"))
+    ScaleCombo := DashGui.Add("DropDownList", "x380 y90 w150 Choose" GetScaleIndex(CLIP_SCALE), GetScaleLabels())
+    GenPanel.Push(ScaleCombo)
+
+    GenPanel.Push(DashGui.Add("Text", "x180 y126 w580 h1 Background3F3F46", ""))
+
+    lblTextSize := DashGui.Add("Text", "x180 y145 w580 h22 +BackgroundTrans cFFFFFF", "Selected Text Translation")
+    lblTextSize.SetFont("s10 Bold")
+    GenPanel.Push(lblTextSize)
+
+    GenPanel.Push(DashGui.Add("Text", "x180 y178 w180 h22 +BackgroundTrans cCCCCCC", "Translate Font Size"))
+    FontSizeEdit := DashGui.Add("Edit", "x380 y174 w80 h24 Number", TEXT_TRANSLATE_FONT_SIZE)
+    GenPanel.Push(FontSizeEdit)
+
+    GenPanel.Push(DashGui.Add("Text", "x180 y214 w580 h1 Background3F3F46", ""))
+
+    lbl2 := DashGui.Add("Text", "x180 y235 w580 h22 +BackgroundTrans cFFFFFF", "System Settings")
+    lbl2.SetFont("s10 Bold")
+    GenPanel.Push(lbl2)
+    GenPanel.Push(DashGui.Add("Text", "x180 y265 w580 h52 Background2A2D3C", ""))
+    isStartup := IsStartupEnabled()
+    StartupChk := DashGui.Add("CheckBox", "x195 y275 w550 h30 Background2A2D3C cWhite" (isStartup ? " Checked" : ""), "  Run app when Windows starts")
+    StartupChk.SetFont("s10 Bold", "Segoe UI")
+    GenPanel.Push(StartupChk)
+
+    ; 2. Translation Panel
+    TrnPanel := []
+    lbl3 := DashGui.Add("Text", "x180 y60 w580 h22 +BackgroundTrans cFFFFFF", "Text Translation Default")
+    lbl3.SetFont("s10 Bold")
+    TrnPanel.Push(lbl3)
+
+    TrnPanel.Push(DashGui.Add("Text", "x180 y90 w180 h22 +BackgroundTrans cCCCCCC", "Translation Hotkey"))
+    HotkeyCombo := DashGui.Add("DropDownList", "x360 y86 w390 Choose" GetTextTranslateHotkeyIndex(TEXT_TRANSLATE_HOTKEY), GetTextTranslateHotkeyLabels())
+    TrnPanel.Push(HotkeyCombo)
+
+    TrnPanel.Push(DashGui.Add("Text", "x180 y132 w180 h22 +BackgroundTrans cCCCCCC", "Target Language"))
+    LangCombo := DashGui.Add("DropDownList", "x360 y128 w390 Choose" GetTextTranslateLangIndex(TEXT_TRANSLATE_LANG), GetTextTranslateLangLabels())
+    TrnPanel.Push(LangCombo)
+
+    TrnPanel.Push(DashGui.Add("Text", "x180 y180 w580 h1 Background3F3F46", ""))
+
+    lbl4 := DashGui.Add("Text", "x180 y195 w580 h22 +BackgroundTrans cFFFFFF", "Image Translate Menu Languages (Multi-select)")
+    lbl4.SetFont("s10 Bold")
+    TrnPanel.Push(lbl4)
+    LV_ImageLangs := DashGui.Add("ListView", "x180 y225 w470 h180 +Checked -Hdr Background2D2D35 cE0E0E0", ["Language"])
+    LV_ImageLangs.SetFont("s9", "Segoe UI")
+    TrnPanel.Push(LV_ImageLangs)
+
+    UpBtn := DashGui.Add("Button", "x660 y225 w100 h30", "▲ Up")
+    DownBtn := DashGui.Add("Button", "x660 y265 w100 h30", "▼ Down")
+    TrnPanel.Push(UpBtn)
+    TrnPanel.Push(DownBtn)
+
+    langArray := StrSplit(IMAGE_TRANSLATE_LANGS, ",")
+    options := GetTextTranslateLangOptions()
+
+    ; 1. Add saved languages first, preserving checked order.
+    for _, code in langArray {
+        code := Trim(code)
+        if (code == "")
+            continue
+        for idx, opt in options {
+            if (opt.code == code) {
+                LV_ImageLangs.Add("Check", opt.label)
+                options.RemoveAt(idx)
+                break
+            }
+        }
+    }
+
+    ; 2. Append remaining languages unchecked.
+    for _, opt in options {
+        LV_ImageLangs.Add("", opt.label)
+    }
+
+    ; --- List item up/down movement helpers ---
+    IsRowChecked(r) {
+        curr := 0
+        Loop {
+            curr := LV_ImageLangs.GetNext(curr, "Checked")
+            if (!curr)
+                return false
+            if (curr == r)
+                return true
+        }
+        return false
+    }
+
+    MoveItemUp(*) {
+        row := LV_ImageLangs.GetNext(0, "Focused")
+        if (row > 1) {
+            txt1 := LV_ImageLangs.GetText(row)
+            chk1 := IsRowChecked(row)
+
+            txt2 := LV_ImageLangs.GetText(row - 1)
+            chk2 := IsRowChecked(row - 1)
+
+            LV_ImageLangs.Modify(row, (chk2 ? "Check" : "-Check") " -Select", txt2)
+            LV_ImageLangs.Modify(row - 1, (chk1 ? "Check" : "-Check") " Select Focus", txt1)
+        }
+    }
+
+    MoveItemDown(*) {
+        row := LV_ImageLangs.GetNext(0, "Focused")
+        if (row > 0 && row < LV_ImageLangs.GetCount()) {
+            txt1 := LV_ImageLangs.GetText(row)
+            chk1 := IsRowChecked(row)
+
+            txt2 := LV_ImageLangs.GetText(row + 1)
+            chk2 := IsRowChecked(row + 1)
+
+            LV_ImageLangs.Modify(row, (chk2 ? "Check" : "-Check") " -Select", txt2)
+            LV_ImageLangs.Modify(row + 1, (chk1 ? "Check" : "-Check") " Select Focus", txt1)
+        }
+    }
+
+    UpBtn.OnEvent("Click", MoveItemUp)
+    DownBtn.OnEvent("Click", MoveItemDown)
+
+    ; 3. About Panel
+    AbtPanel := []
+    lbl5 := DashGui.Add("Text", "x180 y60 w430 h35 +BackgroundTrans cWhite", APP_NAME)
+    lbl5.SetFont("s10 Bold")
+    AbtPanel.Push(lbl5)
+
+    AbtPanel.Push(DashGui.Add("Text", "x180 y100 w580 h20 +BackgroundTrans cGray", "Version " APP_VERSION " • Screen Capture, Annotation & Translation Tool"))
+
+
+    AbtPanel.Push(DashGui.Add("Text", "x180 y130 w580 h1 Background3F3F46", ""))
+
+    AbtPanel.Push(DashGui.Add("Text", "x180 y150 w580 h120 Background27272A", ""))
+
+    lbl6 := DashGui.Add("Text", "x195 y160 w550 h20 +BackgroundTrans cWhite", "👤 Developer Info")
+    lbl6.SetFont("s10 Bold")
+    AbtPanel.Push(lbl6)
+    AbtPanel.Push(DashGui.Add("Text", "x195 y185 w430 h20 +BackgroundTrans cCCCCCC", "Kwang Beom Park (Bob)"))
+    AbtPanel.Push(DashGui.Add("Text", "x195 y205 w430 h50 +BackgroundTrans cA0A0A0", "A finance professional passionate about office automation and daily productivity."))
+
+    githubLoaded := false
+    if FileExist(githubIconPath) {
+        try {
+            GithubPic := DashGui.Add("Picture", "x650 y165 w64 h64 +BackgroundTrans", githubIconPath)
+            GithubPic.OnEvent("Click", (*) => Run("https://github.com/KwangBeomPark"))
+            AbtPanel.Push(GithubPic)
+            githubLoaded := true
+        }
+    }
+
+    if !githubLoaded {
+        GithubLink := DashGui.Add("Link", "x650 y195 w90 h30 Center Background27272A", '<a href="https://github.com/KwangBeomPark" id="github">GitHub</a>')
+        AbtPanel.Push(GithubLink)
+    }
+
+    AbtPanel.Push(DashGui.Add("Text", "x180 y285 w580 h135 Background2D2D35", ""))
+    AbtPanel.Push(DashGui.Add("Text", "x195 y295 w550 h20 +BackgroundTrans cFFDD00", "☕ Support This Project"))
+    AbtPanel.Push(DashGui.Add("Text", "x195 y320 w550 h40 +BackgroundTrans cE0E0E0", "If this tool helps reduce repetitive work, your support will encourage me to continue building more tools."))
+
+    if FileExist(bmcBtnPath) {
+        BmcPic := DashGui.Add("Picture", "x382 y370 w176 h40 +BackgroundTrans", bmcBtnPath)
+        BmcPic.OnEvent("Click", (*) => Run("https://www.buymeacoffee.com/KBPark_Bob"))
+        AbtPanel.Push(BmcPic)
+    } else {
+        BmcLink := DashGui.Add("Link", "x195 y375 w550 h30 Center Background2D2D35 cYellow", '<a href="https://www.buymeacoffee.com/KBPark_Bob">☕ Click here to Support</a>')
+        AbtPanel.Push(BmcLink)
+    }
+
+    TabGenBtn.OnEvent("Click", (*) => SwitchDashboardPanel(1, TabGenBtn, TabTrnBtn, TabAbtBtn, GenPanel, TrnPanel,
+        AbtPanel))
+    TabTrnBtn.OnEvent("Click", (*) => SwitchDashboardPanel(2, TabGenBtn, TabTrnBtn, TabAbtBtn, GenPanel, TrnPanel,
+        AbtPanel))
+    TabAbtBtn.OnEvent("Click", (*) => SwitchDashboardPanel(3, TabGenBtn, TabTrnBtn, TabAbtBtn, GenPanel, TrnPanel,
+        AbtPanel))
+
+    ; --- Shared bottom buttons ---
+    DashGui.Add("Text", "x160 y440 w620 h1 Background3F3F46", "") ; Top border divider
+    SaveBtn := DashGui.Add("Button", "x550 y455 w100 h32", "Save && Close")
+    CancelBtn := DashGui.Add("Button", "x660 y455 w100 h32", "Cancel")
+
+    SaveAllSettings(*) {
+        settingsSaved := SaveDashboardSettings(StartupChk, ScaleCombo, FontSizeEdit, HotkeyCombo, LangCombo, LV_ImageLangs)
+        if settingsSaved
+            ToolTip("✅ All settings saved.")
+        else
+            ToolTip("⚠️ Some settings could not be saved.`r`n⚠️ 일부 설정을 저장하지 못했습니다.")
         SetTimer(() => ToolTip(), -1500)
+        DestroyDash()
     }
 
-    DestroySettings(*) {
-        global SettingsHwnd := 0
-        SettingsGui.Destroy()
+    SaveBtn.OnEvent("Click", SaveAllSettings)
+    CancelBtn.OnEvent("Click", DestroyDash)
+
+    DashGui.OnEvent("Close", DestroyDash)
+    DashGui.OnEvent("Escape", DestroyDash)
+
+    ; Initial tab setup
+    SwitchDashboardPanel(1, TabGenBtn, TabTrnBtn, TabAbtBtn, GenPanel, TrnPanel, AbtPanel)
+
+    ; ── Center the settings window on the monitor containing the mouse cursor ──
+    CoordMode("Mouse", "Screen")
+    MouseGetPos(&mx, &my)
+    monLeft := 0, monTop := 0, monRight := A_ScreenWidth, monBottom := A_ScreenHeight
+    loop MonitorGetCount() {
+        MonitorGetWorkArea(A_Index, &mLeft, &mTop, &mRight, &mBottom)
+        if (mx >= mLeft && mx <= mRight && my >= mTop && my <= mBottom) {
+            monLeft := mLeft, monTop := mTop, monRight := mRight, monBottom := mBottom
+            break
+        }
     }
+    centerX := monLeft + (monRight - monLeft - 780) // 2
+    centerY := monTop + (monBottom - monTop - 500) // 2
 
-    SaveBtn.OnEvent("Click", SaveSettings)
-    CloseBtn.OnEvent("Click", DestroySettings)
-    SettingsGui.OnEvent("Close", DestroySettings)
-    SettingsGui.OnEvent("Escape", DestroySettings)
-
-    SettingsGui.Show("w520 h370")
-    SettingsHwnd := SettingsGui.Hwnd
+    DashGui.Show("x" centerX " y" centerY " w780 h500")
+    DashboardHwnd := DashGui.Hwnd
 }
 
 SCW_MinimizeAll() {
@@ -1390,7 +2067,7 @@ SCW_RestoreAll() {
 }
 
 SCW_CloseAll() {
-    ; Map을 순회하며 모든 윈도우 닫기
+    ; Iterate the map and close all windows.
     targetHwnds := []
     for hwnd, info in ClipWins
         targetHwnds.Push(info.gui)
@@ -1408,7 +2085,7 @@ SCW_CloseAll() {
  * @returns {None}
  */
 SCW_SortCascade() {
-    static currentMonitor := 0  ; 모니터 토글 상태
+    static currentMonitor := 0  ; Monitor toggle state
 
     arr := []
     for hwnd, winInfo in ClipWins {
@@ -1419,14 +2096,14 @@ SCW_SortCascade() {
     if (n == 0)
         return
 
-    ; 모니터 개수 확인 및 순환
+    ; Check monitor count and cycle the target monitor.
     monCount := MonitorGetCount()
     currentMonitor := Mod(currentMonitor, monCount) + 1  ; 1 → 2 → ... → 1
 
-    ; 선택된 모니터의 왼쪽 상단 좌표 가져오기
+    ; Get the top-left coordinates of the selected monitor.
     MonitorGet(currentMonitor, &monLeft, &monTop)
 
-    ; ID 순으로 정렬 (버블 정렬)
+    ; Sort by ID using bubble sort.
     loop n {
         i := 1
         while (i < n) {
@@ -1439,7 +2116,7 @@ SCW_SortCascade() {
         }
     }
 
-    ; 선택된 모니터의 왼쪽 상단 기준으로 캐스케이드 배치
+    ; Cascade windows from the selected monitor's top-left corner.
     for index, winInfo in arr {
         x := monLeft + (n - index) * MINI_SIZE
         y := monTop + (index - 1) * MINI_SIZE
@@ -1451,128 +2128,7 @@ SCW_SortCascade() {
     SetTimer(() => ToolTip(), -1500)
 }
 
-/**
- * 앱 정보 및 커피 후원 안내 다이얼로그를 표시하는 함수
- * Displays the About App dialog with version, author, and coffee support details.
- * @returns {None}
- */
-ShowAboutDialog() {
-    global AboutHwnd, bmcBtnPath
-
-    ; 이미 열려있으면 활성화하고 끝냄
-    if AboutHwnd && WinExist("ahk_id " AboutHwnd) {
-        WinActivate("ahk_id " AboutHwnd)
-        return
-    }
-
-    AboutGui := Gui("-Caption +AlwaysOnTop +ToolWindow +Border -DPIScale", "About ScreenClip Tool")
-    AboutGui.BackColor := "1E1E24"
-
-    ; 타이틀바 배경 (너비 560으로 증가)
-    AboutGui.Add("Text", "x0 y0 w560 h45 Background141416", "")
-
-    ; 타이틀 텍스트
-    TitleTxt := AboutGui.Add("Text", "x15 y12 w350 h25 +BackgroundTrans cWhite", "📸 About ScreenClip Tool")
-    TitleTxt.SetFont("s11 Bold", "Segoe UI")
-
-    ; 우측 상단 닫기 버튼 "×" (x525로 조정)
-    CloseBtn := AboutGui.Add("Text", "x525 y10 w25 h25 Center +0x200 +BackgroundTrans cGray", "×")
-    CloseBtn.SetFont("s16 Bold")
-
-    DestroyAbout(*) {
-        global AboutHwnd := 0
-        AboutGui.Destroy()
-    }
-
-    CloseBtn.OnEvent("Click", DestroyAbout)
-
-    ; 앱 제목 및 로고 (왼쪽 정렬)
-    AppTitle := AboutGui.Add("Text", "x20 y65 w300 h35 +BackgroundTrans cWhite", "ScreenClip Tool")
-    AppTitle.SetFont("s18 Bold", "Segoe UI")
-
-    ; ── 상단 우측 노란색 flat Manual 버튼 (x440으로 조정) ──
-    ManualBtn := AboutGui.Add("Text", "x440 y65 w100 h32 BackgroundFFDD00 c1E1E24 Center +0x200", "📖 Manual")
-    ManualBtn.SetFont("s10 Bold", "Segoe UI")
-    ManualBtn.OnEvent("Click", (*) => ShowManualDialog())
-
-    AppSub := AboutGui.Add("Text", "x20 y105 w520 h20 +BackgroundTrans cGray", "Version 1.1.0 • Screen Capture, Annotation & Translation Tool")
-    AppSub.SetFont("s9", "Segoe UI")
-
-    ; 구분선
-    AboutGui.Add("Text", "x20 y130 w520 h1 Background3F3F46", "")
-
-    ; ── Windows 시작 시 자동 실행 강조 카드 ──
-    AboutGui.Add("Text", "x20 y142 w520 h52 Background2A2D3C", "") ; 푸른빛이 도는 세련된 강조 카드 배경
-    isStartup := IsStartupEnabled()
-    StartupChk := AboutGui.Add("CheckBox", "x38 y153 w480 h30 Background2A2D3C cWhite" (isStartup ? " Checked" : ""), "  Run app when Windows starts (윈도우 시작 시 자동 등록)")
-    StartupChk.SetFont("s10 Bold", "Segoe UI")
-    StartupChk.OnEvent("Click", OnStartupToggle)
-
-    OnStartupToggle(*) {
-        if StartupChk.Value
-            EnableStartup()
-        else
-            DisableStartup()
-    }
-
-    ; 개발자 정보 카드 (높이 150으로 컴팩트하게 재조정)
-    AboutGui.Add("Text", "x20 y210 w520 h150 Background27272A", "")
-
-    DevTitle := AboutGui.Add("Text", "x35 y220 w490 h20 +BackgroundTrans cWhite", "👤 Developer Info")
-    DevTitle.SetFont("s10 Bold", "Segoe UI")
-
-    DevText1 := AboutGui.Add("Text", "x35 y245 w370 h20 +BackgroundTrans cCCCCCC", "KBPark (Financial Specialist)")
-    DevText1.SetFont("s9 Bold", "Segoe UI")
-
-    DevText2 := AboutGui.Add("Text", "x35 y265 w370 h80 +BackgroundTrans cA0A0A0", "A finance professional passionate about office automation and daily productivity.`n`n👉 Click the GitHub cat icon on the right to view other office apps!")
-    DevText2.SetFont("s9", "Segoe UI")
-
-    ; ── GitHub 자동화 도구 링크 및 이미지 버튼 추가 (1:1 비율 아이콘 사용으로 찌그러짐 방지) ──
-
-    githubIconPath := A_ScriptDir "\github_icon.png"
-    try FileCopy("C:\Users\kwangbeom.park\.gemini\antigravity\brain\c4b06f63-9081-401a-96e9-829693c01253\github_icon_solid_1780569397341.png", githubIconPath, true)
-
-    if FileExist(githubIconPath) {
-        try {
-            ; 더 크게 확대(w110 h110) 및 우측 여백에 맞춰 정렬 배치
-            GithubPic := AboutGui.Add("Picture", "x415 y230 w110 h110 +BackgroundTrans", githubIconPath)
-            GithubPic.OnEvent("Click", (*) => Run("https://github.com/KwangBeomPark"))
-        } catch {
-            ; ignore load error
-        }
-    }
-
-    ; 커피 후원 카드 (위로 조금 당겨서 y380으로 조정, 높이 170)
-    AboutGui.Add("Text", "x20 y380 w520 h170 Background2D2D35", "")
-
-    SupportTitle := AboutGui.Add("Text", "x35 y390 w490 h20 +BackgroundTrans cFFDD00", "☕ Support This Project")
-    SupportTitle.SetFont("s11 Bold", "Segoe UI")
-
-    SupportText := AboutGui.Add("Text", "x35 y415 w490 h50 +BackgroundTrans cE0E0E0", "If this tool helps reduce repetitive work or improve your productivity, your support will encourage me to continue building more practical automation tools for everyday workflows.")
-    SupportText.SetFont("s9", "Segoe UI")
-
-    ; 후원 버튼 이미지 (20% 축소: w176 h40, 중앙 정렬, y485)
-    if FileExist(bmcBtnPath) {
-        BmcPic := AboutGui.Add("Picture", "x192 y485 w176 h40 +BackgroundTrans", bmcBtnPath)
-        BmcPic.OnEvent("Click", (*) => Run("https://www.buymeacoffee.com/KBPark_Bob"))
-    } else {
-        BmcLink := AboutGui.Add("Link", "x35 y490 w490 h30 Center Background2D2D35 cYellow", '<a href="https://www.buymeacoffee.com/KBPark_Bob">☕ Click here to Support on Buy Me a Coffee</a>')
-        BmcLink.SetFont("s10 Bold", "Segoe UI")
-    }
-
-    ; ── 하단 버튼: Close (y600으로 이동하여 세로 레이아웃 최적화) ──
-    CloseButton := AboutGui.Add("Button", "x210 y600 w140 h40", "Close")
-    CloseButton.SetFont("s10", "Segoe UI")
-    CloseButton.OnEvent("Click", DestroyAbout)
-
-    AboutGui.OnEvent("Close", DestroyAbout)
-    AboutGui.OnEvent("Escape", DestroyAbout)
-
-    AboutGui.Show("w560 h660")
-    AboutHwnd := AboutGui.Hwnd
-}
-
-; ── Windows 시작 시 자동 실행 헬퍼 ──
+; ── Windows startup auto-run helpers ──
 IsStartupEnabled() {
     static regKey := "HKCU\Software\Microsoft\Windows\CurrentVersion\Run"
     try {
@@ -1586,15 +2142,16 @@ IsStartupEnabled() {
 EnableStartup() {
     static regKey := "HKCU\Software\Microsoft\Windows\CurrentVersion\Run"
     exePath := A_IsCompiled ? A_ScriptFullPath : ('"' A_AhkPath '" "' A_ScriptFullPath '"')
-    try RegWrite(exePath, "REG_SZ", regKey, "ScreenClipTool")
+    return SafeRegWriteString(exePath, regKey, "ScreenClipTool")
 }
 
 DisableStartup() {
     static regKey := "HKCU\Software\Microsoft\Windows\CurrentVersion\Run"
     try RegDelete(regKey, "ScreenClipTool")
+    return !IsStartupEnabled()
 }
 
-; ── 매뉴얼 다이얼로그 ──
+; ── Manual dialog ──
 global ManualHwnd := 0
 
 ShowManualDialog() {
@@ -1609,20 +2166,20 @@ ShowManualDialog() {
     ManGui.BackColor := "FFFFFF"
     ManGui.SetFont("s9", "Segoe UI")
 
-    ; ── Language 드롭다운 ──
+    ; ── Language dropdown ──
     ManGui.Add("Text", "x14 y12 w70 h22 cBlack", "Language:")
     ManGui.SetFont("s9", "Segoe UI")
     langList := ["KR 한국어", "US English", "PL Polski", "DE Deutsch", "FR Français", "ES Español"]
     LangDDL := ManGui.Add("DropDownList", "x90 y9 w140 Choose2", langList)
 
-    ; ── 매뉴얼 텍스트 영역 ──
+    ; ── Manual text area ──
     ManEdit := ManGui.Add("Edit", "x14 y42 w552 h800 ReadOnly +Multi +VScroll", GetManualText("en"))
 
-    ; ── 하단 Close 버튼 ──
+    ; ── Bottom Close button ──
     CloseMBtn := ManGui.Add("Button", "x240 y852 w100 h32", "Close")
     CloseMBtn.SetFont("s9", "Segoe UI")
 
-    ; 언어 변경 이벤트
+    ; Language-change event
     OnManualLangChange(*) {
         selected := LangDDL.Text
         if InStr(selected, "한국어")
@@ -1650,7 +2207,7 @@ ShowManualDialog() {
     ManGui.OnEvent("Close", DestroyManual)
     ManGui.OnEvent("Escape", DestroyManual)
 
-    ; Resize 핸들러
+    ; Resize handler
     OnManualResize(thisGui, MinMax, Width, Height) {
         if (MinMax == -1)
             return
