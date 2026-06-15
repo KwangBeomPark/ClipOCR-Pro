@@ -4,7 +4,7 @@
 A portable screen capture, OCR, selected-text translation, and image workflow tool for practical office work, built with AutoHotkey v2.
 
 <p align="center">
-  <img src="./demo.gif" width="900" alt="ClipOCR-Pro Demo">
+  <img src="./assets/demo.gif" width="900" alt="ClipOCR-Pro Demo">
 </p>
 
 ---
@@ -47,8 +47,8 @@ If no release file is available yet, please build or run the source using AutoHo
 
 1. Install [AutoHotkey v2](https://www.autohotkey.com/).
 2. Clone this repository.
-3. Customize `ClipOCR-Pro.ahk` as needed.
-4. Use the AutoHotkey compiler, Ahk2Exe, or the included build scripts to package your own `ClipOCR-Pro.exe` with custom icons and metadata.
+3. Customize `src/ClipOCR-Pro.ahk` as needed.
+4. Use Ahk2Exe to package your own `ClipOCR-Pro.exe`. The source includes `assets/ClipOCR-Pro.ico`, and the Ahk2Exe directive embeds it as the executable icon.
 
 ---
 
@@ -65,13 +65,17 @@ If no release file is available yet, please build or run the source using AutoHo
 
 ## 📖 User Guide
 
+<p align="center">
+  <img src="./assets/manual.png" width="900" alt="ClipOCR-Pro Manual Infographic">
+</p>
+
 ✔ **Capture Window**: Capture a selected screen area and keep it as an always-on-top floating image.  
 ✔ **Annotation**: Add red boxes, highlights, and quick visual emphasis to captured images.  
 ✔ **Translation**: Translate selected text or use image translation workflows when working with foreign-language documents.  
 ✔ **Copy / Save / Resize**: Copy, save, resize, or reuse captured images based on app settings.  
 ✔ **Window Management**: Minimize, restore, align, resize, or close floating capture windows using shortcuts.
 
-> Manual infographic note: if you add a manual image later, place it in the repository as `App01Manual.png` and reference it here.
+> Selected text translation and image translation use Google Translate services, so review sensitive company or personal information before sending it.
 
 ---
 
@@ -89,20 +93,23 @@ If no release file is available yet, please build or run the source using AutoHo
 
 ---
 
-## ⚙️ Settings File & Team Deployment
+## ⚙️ Settings Storage
 
-ClipOCR-Pro stores configuration data in a local `config.ini` file.
+ClipOCR-Pro stores per-user configuration data in the Windows Registry.
 
-For team deployment, one manager can configure the preferred capture size, translation options, resize settings, and other defaults first, then distribute the `config.ini` file to colleagues.
+```text
+HKCU\Software\ScreenClipTool
+```
+
+Current settings include clipboard image scale, selected-text translation language, translation hotkey, and image translation menu languages.
 
 Recommended portable deployment structure:
 
 ```text
 ClipOCR-Pro.exe
-config.ini
 ```
 
-Placing the shared `config.ini` in the same folder as the executable helps team members start with the same configuration without manual setup.
+If a team needs shared defaults, export and distribute the values under the Registry path above according to company policy.
 
 ---
 
@@ -112,7 +119,7 @@ Placing the shared `config.ini` in the same folder as the executable helps team 
 - Local capture, annotation, copy, save, and resize actions are handled on the user's PC.
 - When translation features are used, selected text or images may be processed through external translation services such as Google Translate, depending on the configured workflow.
 - Avoid translating or storing passwords, API keys, personal credentials, confidential financial data, or highly sensitive documents through external services.
-- Review `config.ini` before distributing it to colleagues, especially if it contains API-related or workflow-specific settings.
+- Review exported Registry settings before distributing them to colleagues, especially if they contain workflow-specific values.
 
 ---
 
