@@ -1,13 +1,16 @@
 #Requires AutoHotkey v2.0
 #SingleInstance Force
 ;@Ahk2Exe-SetMainIcon ..\assets\ClipOCR-Pro.ico
+;@Ahk2Exe-SetVersion 1.2.2.0
 #Include Gdip_All.ahk
 
 ; ── App metadata ──
 global APP_NAME := "ClipOCR-Pro"
-global APP_VERSION := "1.1.1"
+global APP_VERSION := "1.2.2"
 global APP_ICON_PATH := A_IsCompiled ? A_ScriptFullPath : A_ScriptDir "\..\assets\ClipOCR-Pro.ico"
 global APP_SOURCE_ICON_PATH := A_ScriptDir "\..\assets\ClipOCR-Pro.ico"
+global GITHUB_RELEASES_URL := "https://github.com/KwangBeomPark/ClipOCR-Pro/releases"
+global GITHUB_LATEST_RELEASE_API := "https://api.github.com/repos/KwangBeomPark/ClipOCR-Pro/releases/latest"
 
 ; ── Global asset paths and initialization ──
 global bmcBtnPath := A_Temp "\ClipOCR_bmc_btn.png"
@@ -48,13 +51,20 @@ AppCleanup(*) {
 ; ── UI and behavior constants ──
 global MINI_SIZE := 80          ; Minimized window size (px)
 global MINI_OPACITY := 128      ; Minimized opacity (0-255)
-global BORDER_WIDTH := 3        ; Capture window border width (px)
+global WINDOW_BORDER_WIDTH := 1 ; Floating capture window border width (px)
+global ANNOTATION_BORDER_WIDTH := 3 ; Red annotation rectangle width (px)
 global UNDO_MAX := 5            ; Maximum undo steps
 global TEXT_TRANSLATE_MAX_CHARS := 5000 ; Safe maximum length for Google Text Translation GET requests
+global JPG_QUALITY := 85        ; Desktop save and size-estimate quality
+global MAIL_COPY_TIMEOUT_SECONDS := 3
+global MAIL_SUBJECT_ALLOWANCE_BYTES := 8 * 1024
+global MAIL_HEADER_ALLOWANCE_BYTES := 64 * 1024
+global MAIL_ENCODING_FACTOR := 1.37
 
 ; ── User settings: keep the Registry path name for backward compatibility ──
 global REG_PATH := "HKCU\Software\ScreenClipTool"
-global CLIP_SCALE := 1.0
+global CLIP_WIDTH := 1000
+global COPY_OUTLINE_ENABLED := true
 global TEXT_TRANSLATE_LANG := "ko"
 global TEXT_TRANSLATE_HOTKEY := "#CapsLock"
 global TEXT_TRANSLATE_FONT_SIZE := 10
@@ -70,11 +80,20 @@ global ANNOTATION_TARGET_HWND := 0
 global TEXT_SOURCE_LAST_HWND := 0
 global TEMP_FILES := []
 global ENABLE_BMC_AUTO_DOWNLOAD := true
+global MAIL_SIZE_CHECK_RUNNING := false
+global UPDATE_CHECK_STATE := { status: "idle", latestVersion: "", releaseUrl: GITHUB_RELEASES_URL,
+    request: 0, startedTick: 0, statusCtrl: 0, detailCtrl: 0, updateBtn: 0, dashboardHwnd: 0 }
 
 try {
-    CLIP_SCALE := NormalizeClipScale(RegRead(REG_PATH, "Scale"))
+    CLIP_WIDTH := NormalizeClipWidth(RegRead(REG_PATH, "ClipboardWidth"))
 } catch {
-    CLIP_SCALE := 1.0
+    CLIP_WIDTH := 1000
+}
+
+try {
+    COPY_OUTLINE_ENABLED := NormalizeCopyOutline(RegRead(REG_PATH, "CopyOutline"))
+} catch {
+    COPY_OUTLINE_ENABLED := true
 }
 
 try {
@@ -206,18 +225,20 @@ ClipMenu.Add("💾 8. Save to Desktop (Ctrl+S)", MenuHandler)
 ClipMenu.Add("🎨 9. Copy To Paint", MenuHandler)
 ClipMenu.Add() ; Separator
 
-; 10. Clipboard scale submenu
-ScaleMenu := Menu()
-ScaleMenu.Add("50%", (*) => SetClipScale(0.5))
-ScaleMenu.Add("60%", (*) => SetClipScale(0.6))
-ScaleMenu.Add("70%", (*) => SetClipScale(0.7))
-ScaleMenu.Add("80%", (*) => SetClipScale(0.8))
-ScaleMenu.Add("90%", (*) => SetClipScale(0.9))
-ScaleMenu.Add("100%", (*) => SetClipScale(1.0))
-ScaleMenu.Add("150%", (*) => SetClipScale(1.5))
-UpdateScaleMenu()
+; 10. Clipboard width submenu
+WidthMenu := Menu()
+WidthMenu.Add("Original Size (Ctrl+0)", (*) => SetClipWidth(0))
+WidthMenu.Add()
+WidthMenu.Add("400 px (Ctrl+1)", (*) => SetClipWidth(400))
+WidthMenu.Add("600 px (Ctrl+2)", (*) => SetClipWidth(600))
+WidthMenu.Add("800 px (Ctrl+3)", (*) => SetClipWidth(800))
+WidthMenu.Add("1000 px (Ctrl+4)", (*) => SetClipWidth(1000))
+WidthMenu.Add("1200 px (Ctrl+5)", (*) => SetClipWidth(1200))
+WidthMenu.Add("1400 px (Ctrl+6)", (*) => SetClipWidth(1400))
+WidthMenu.Add("1600 px (Ctrl+7)", (*) => SetClipWidth(1600))
+UpdateWidthMenu()
 
-ClipMenu.Add("⚙️ 10. Clipboard Scale", ScaleMenu)
+ClipMenu.Add("⚙️ 10. Clipboard Width", WidthMenu)
 ClipMenu.Add() ; Separator
 ClipMenu.Add("📐 11. Sort All Clips (Ctrl+Left)", (*) => SCW_SortCascade())
 ClipMenu.Add("🔽 12. Minimize All (Ctrl+Up)", (*) => SCW_MinimizeAll())
@@ -235,11 +256,20 @@ ApplyTextTranslateHotkey()
 ; Hotkeys
 #LButton:: ScreenClip2Win(1)  ; Win+LButton -> floating clip + auto copy to clipboard
 #CapsLock:: TranslateSelectedText(false) ; Default selected-text translation hotkey
+$^#0:: EstimateOutlookWebMailSize()
 
 #HotIf WinActive("ScreenClippingWindow ahk_class AutoHotkeyGUI")
 ^c:: SCW_Win2Clipboard()
 ^s:: SCW_Win2File()
 ^z:: SCW_Undo()
+^0:: SCW_SetWidthAndCopy(0)
+^1:: SCW_SetWidthAndCopy(400)
+^2:: SCW_SetWidthAndCopy(600)
+^3:: SCW_SetWidthAndCopy(800)
+^4:: SCW_SetWidthAndCopy(1000)
+^5:: SCW_SetWidthAndCopy(1200)
+^6:: SCW_SetWidthAndCopy(1400)
+^7:: SCW_SetWidthAndCopy(1600)
 ^Left:: SCW_SortCascade()
 ^Up:: SCW_MinimizeAll()
 ^Down:: SCW_RestoreAll()
@@ -268,18 +298,27 @@ ScreenClip2Win(clipToClipboard := 0) {
     }
 }
 
-NormalizeClipScale(value) {
+NormalizeClipWidth(value) {
     try {
-        scale := Float(value)
+        width := Integer(value)
     } catch {
-        return 1.0
+        return 1000
     }
 
-    for _, allowed in [0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.5] {
-        if (Abs(scale - allowed) < 0.001)
+    for _, allowed in [0, 400, 600, 800, 1000, 1200, 1400, 1600] {
+        if (width == allowed)
             return allowed
     }
-    return 1.0
+    return 1000
+}
+
+NormalizeCopyOutline(value) {
+    value := Trim(String(value))
+    if (value == "0")
+        return false
+    if (value == "1")
+        return true
+    return true
 }
 
 NormalizeTextTranslateFontSize(value) {
@@ -344,15 +383,208 @@ SafeClipboardRestore(clipBackup) {
     return false
 }
 
-SafeSaveBitmapToFile(pBitmap, filePath) {
+EstimateOutlookWebMailSize() {
+    global MAIL_SIZE_CHECK_RUNNING, MAIL_COPY_TIMEOUT_SECONDS
+
+    if MAIL_SIZE_CHECK_RUNNING {
+        ShowMailSizeTooltip("A mail size estimate is already running.")
+        return
+    }
+
+    sourceHwnd := WinExist("A")
+    if !IsOutlookWebMailContext(sourceHwnd) {
+        ShowMailSizeTooltip("Open an Outlook web mail compose window and try again.")
+        return
+    }
+
+    MAIL_SIZE_CHECK_RUNNING := true
+    Critical("On")
+    clipBackup := { ok: false, data: "" }
+    mailClip := ""
+    restoreRequired := false
+    restoreOk := true
+    copiedBody := false
+    message := ""
+
+    try {
+        clipBackup := SafeClipboardBackup()
+        if !clipBackup.ok
+            throw Error("Could not back up the clipboard.")
+        restoreRequired := true
+
+        if !WinActive("ahk_id " sourceHwnd)
+            throw Error("The Outlook window is no longer active.")
+
+        A_Clipboard := ""
+        sequenceBeforeCopy := DllCall("GetClipboardSequenceNumber", "UInt")
+        Send("^a")
+        Sleep(80)
+
+        if !WinActive("ahk_id " sourceHwnd)
+            throw Error("The Outlook window changed before the message body was copied.")
+
+        Send("^c")
+        if !WaitForClipboardChange(sequenceBeforeCopy, MAIL_COPY_TIMEOUT_SECONDS)
+            throw Error("Could not copy the message body within 3 seconds.")
+
+        Sleep(150)
+        if !WinActive("ahk_id " sourceHwnd)
+            throw Error("The Outlook window changed while reading the message body.")
+        if !ClipboardHasHtmlFormat()
+            throw Error("Click inside the message body and try again.")
+
+        mailClip := ClipboardAll()
+        if (mailClip.Size <= 0)
+            throw Error("The copied message body is empty.")
+
+        estimatedBytes := CalculateOutlookWebMailBytes(mailClip.Size)
+        estimatedMb := estimatedBytes / 1048576
+        message := "Outlook web mail estimate: ~" Format("{:.2f}", estimatedMb) " MB"
+        message .= "`r`nBody + subject/header allowance, attachments excluded"
+        message .= "`r`nActual sent size may differ."
+        copiedBody := true
+    } catch as e {
+        message := "Mail size estimate failed: " ShortErrorMessage(e.Message)
+    } finally {
+        mailClip := ""
+        if restoreRequired
+            restoreOk := SafeClipboardRestore(clipBackup)
+        clipBackup := { ok: false, data: "" }
+
+        if (copiedBody && WinActive("ahk_id " sourceHwnd))
+            Send("{Right}")
+
+        MAIL_SIZE_CHECK_RUNNING := false
+        Critical("Off")
+    }
+
+    if !restoreOk
+        message .= "`r`nWarning: The original clipboard could not be restored."
+    ShowMailSizeTooltip(message, restoreOk ? 5000 : 7000)
+}
+
+IsOutlookWebMailContext(hwnd) {
+    if !hwnd
+        return false
+
+    try {
+        hostProcess := StrLower(WinGetProcessName("ahk_id " hwnd))
+        windowTitle := WinGetTitle("ahk_id " hwnd)
+    } catch {
+        return false
+    }
+
+    focusedProcess := GetFocusedWindowProcessName(hwnd)
+    return IsSupportedOutlookWebMailHost(hostProcess, focusedProcess, windowTitle)
+}
+
+IsSupportedOutlookWebMailHost(hostProcess, focusedProcess, windowTitle) {
+    hostProcess := StrLower(hostProcess)
+    focusedProcess := StrLower(focusedProcess)
+    titleHasOutlook := InStr(windowTitle, "Outlook", false) > 0
+
+    if (hostProcess == "olk.exe" || hostProcess == "outlook.exe")
+        return true
+    if ((hostProcess == "msedge.exe" || hostProcess == "chrome.exe") && titleHasOutlook)
+        return true
+    return ((hostProcess == "msedgewebview2.exe" || focusedProcess == "msedgewebview2.exe") && titleHasOutlook)
+}
+
+CalculateOutlookWebMailBytes(clipboardBytes) {
+    global MAIL_SUBJECT_ALLOWANCE_BYTES, MAIL_HEADER_ALLOWANCE_BYTES, MAIL_ENCODING_FACTOR
+    clipboardBytes := Max(0, Integer(clipboardBytes))
+    return Ceil((clipboardBytes + MAIL_SUBJECT_ALLOWANCE_BYTES) * MAIL_ENCODING_FACTOR
+        + MAIL_HEADER_ALLOWANCE_BYTES)
+}
+
+GetFocusedWindowProcessName(activeHwnd) {
+    try {
+        activeThreadId := DllCall("GetWindowThreadProcessId", "Ptr", activeHwnd, "UInt*", &activePid := 0, "UInt")
+        if !activeThreadId
+            return ""
+
+        guiInfo := Buffer(8 + 6 * A_PtrSize + 16, 0)
+        NumPut("UInt", guiInfo.Size, guiInfo, 0)
+        if !DllCall("GetGUIThreadInfo", "UInt", activeThreadId, "Ptr", guiInfo.Ptr)
+            return ""
+
+        focusHwnd := NumGet(guiInfo, 8 + A_PtrSize, "Ptr")
+        if !focusHwnd
+            return ""
+        DllCall("GetWindowThreadProcessId", "Ptr", focusHwnd, "UInt*", &focusPid := 0)
+        return focusPid ? StrLower(ProcessGetName(focusPid)) : ""
+    } catch {
+        return ""
+    }
+}
+
+WaitForClipboardChange(sequenceBefore, timeoutSeconds) {
+    deadline := A_TickCount + Round(timeoutSeconds * 1000)
+    while (A_TickCount < deadline) {
+        if (DllCall("GetClipboardSequenceNumber", "UInt") != sequenceBefore && ClipWait(0.1, true))
+            return true
+        Sleep(25)
+    }
+    return false
+}
+
+ClipboardHasHtmlFormat() {
+    htmlFormat := DllCall("RegisterClipboardFormat", "Str", "HTML Format", "UInt")
+    return htmlFormat && DllCall("IsClipboardFormatAvailable", "UInt", htmlFormat)
+}
+
+ShowMailSizeTooltip(message, durationMs := 5000) {
+    ToolTip(message)
+    SetTimer(() => ToolTip(), -durationMs)
+}
+
+SafeSaveBitmapToFile(pBitmap, filePath, quality := 75) {
     if (!pBitmap || filePath == "")
         return false
     try {
-        result := Gdip_SaveBitmapToFile(pBitmap, filePath)
+        SplitPath(filePath, , , &extension)
+        if RegExMatch(extension, "i)^(jpg|jpeg|jpe|jfif)$")
+            result := SaveJpegBitmapToFile(pBitmap, filePath, quality)
+        else
+            result := Gdip_SaveBitmapToFile(pBitmap, filePath)
         return (result == 0 && FileExist(filePath))
     } catch {
         return false
     }
+}
+
+SaveJpegBitmapToFile(pBitmap, filePath, quality := 85) {
+    quality := Max(0, Min(100, Integer(quality)))
+    DllCall("gdiplus\GdipGetImageEncodersSize", "UInt*", &encoderCount := 0, "UInt*", &encoderSize := 0)
+    if (!encoderCount || !encoderSize)
+        return -2
+
+    codecInfo := Buffer(encoderSize, 0)
+    DllCall("gdiplus\GdipGetImageEncoders", "UInt", encoderCount, "UInt", encoderSize, "UPtr", codecInfo.Ptr)
+    pCodec := 0
+    loop encoderCount {
+        offset := (48 + 7 * A_PtrSize) * (A_Index - 1)
+        mimePtr := NumGet(codecInfo, offset + 32 + 4 * A_PtrSize, "UPtr")
+        if (mimePtr && StrGet(mimePtr, "UTF-16") == "image/jpeg") {
+            pCodec := codecInfo.Ptr + offset
+            break
+        }
+    }
+    if !pCodec
+        return -3
+
+    qualityValue := Buffer(4, 0)
+    NumPut("UInt", quality, qualityValue)
+    encoderParams := Buffer(24 + 2 * A_PtrSize, 0)
+    NumPut("UPtr", 1, encoderParams, 0)
+    DllCall("ole32\CLSIDFromString", "WStr", "{1D5BE4B5-FA4A-452D-9CDD-5DB35105E7EB}",
+        "UPtr", encoderParams.Ptr + A_PtrSize, "HRESULT")
+    NumPut("UInt", 1, encoderParams, 16 + A_PtrSize)
+    NumPut("UInt", 4, encoderParams, 20 + A_PtrSize)
+    NumPut("UPtr", qualityValue.Ptr, encoderParams, 24 + A_PtrSize)
+
+    return DllCall("gdiplus\GdipSaveImageToFile", "UPtr", pBitmap, "UPtr", StrPtr(filePath),
+        "UPtr", pCodec, "UPtr", encoderParams.Ptr)
 }
 
 SafeRegWriteString(value, regPath, valueName) {
@@ -814,6 +1046,29 @@ UpdateTextTranslationPopupResult(sourceText, selectedLabel, resultEdit, currentT
     }
 }
 
+GetCenteredPositionOnMouseMonitor(windowW, windowH) {
+    CoordMode("Mouse", "Screen")
+    MouseGetPos(&mx, &my)
+
+    workLeft := 0, workTop := 0, workRight := A_ScreenWidth, workBottom := A_ScreenHeight
+    try MonitorGetWorkArea(1, &workLeft, &workTop, &workRight, &workBottom)
+
+    loop MonitorGetCount() {
+        MonitorGet(A_Index, &monitorLeft, &monitorTop, &monitorRight, &monitorBottom)
+        if (mx >= monitorLeft && mx < monitorRight && my >= monitorTop && my < monitorBottom) {
+            MonitorGetWorkArea(A_Index, &workLeft, &workTop, &workRight, &workBottom)
+            break
+        }
+    }
+
+    centeredX := workLeft + (workRight - workLeft - windowW) // 2
+    centeredY := workTop + (workBottom - workTop - windowH) // 2
+    return {
+        x: Max(workLeft, centeredX),
+        y: Max(workTop, centeredY)
+    }
+}
+
 GetPopupPositionNearMouse(popupW, popupH) {
     CoordMode("Mouse", "Screen")
     MouseGetPos(&mx, &my)
@@ -996,18 +1251,18 @@ CreateClipWin(pBitmap, x, y) {
     ClipGui := Gui("-Caption +ToolWindow +AlwaysOnTop +OwnDialogs -DPIScale", "ScreenClippingWindow")
     ClipGui.MarginX := 0
     ClipGui.MarginY := 0
-    ClipGui.BackColor := "ff6666" ; Border color
+    ClipGui.BackColor := "000000" ; Thin black window border
 
     W := Gdip_GetImageWidth(pBitmap)
     H := Gdip_GetImageHeight(pBitmap)
 
     hBitmap := Gdip_CreateHBITMAPFromBitmap(pBitmap)
-    Pic := ClipGui.Add("Picture", "x" BORDER_WIDTH " y" BORDER_WIDTH " w" W " h" H, "HBITMAP:*" hBitmap)
+    Pic := ClipGui.Add("Picture", "x" WINDOW_BORDER_WIDTH " y" WINDOW_BORDER_WIDTH " w" W " h" H, "HBITMAP:*" hBitmap)
     DllCall("DeleteObject", "ptr", hBitmap)
 
     ; Add a tiny close button in the top right
     CloseBtnSize := 16
-    CloseBtnX := W + (BORDER_WIDTH * 2) - CloseBtnSize - 1
+    CloseBtnX := W + (WINDOW_BORDER_WIDTH * 2) - CloseBtnSize - 1
     CloseBtnY := 1
     CloseBtn := ClipGui.Add("Text", "x" CloseBtnX " y" CloseBtnY " w" CloseBtnSize " h" CloseBtnSize " Center +BackgroundTrans cWhite +0x200",
         "×")
@@ -1037,13 +1292,13 @@ CreateClipWin(pBitmap, x, y) {
     NumText := ClipGui.Add("Text", "x0 y0 w80 h80 Center 0x200 +BackgroundTrans cYellow Hidden", assignedId)
     NumText.SetFont("s24 Bold", "Verdana")
 
-    ClipGui.Show("x" (x - BORDER_WIDTH) " y" (y - BORDER_WIDTH) " w" (W + BORDER_WIDTH * 2) " h" (H + BORDER_WIDTH * 2) " NA"
+    ClipGui.Show("x" (x - WINDOW_BORDER_WIDTH) " y" (y - WINDOW_BORDER_WIDTH) " w" (W + WINDOW_BORDER_WIDTH * 2) " h" (H + WINDOW_BORDER_WIDTH * 2) " NA"
     )
 
     hwnd := ClipGui.Hwnd
     ClipWins[hwnd] := { pBitmap: pBitmap, w: W, h: H, gui: ClipGui, IsMinimized: false, id: assignedId, NumText: NumText,
         NumBg: NumBg,
-        picCtrl: Pic, UndoStack: [], orgX: x - BORDER_WIDTH, orgY: y - BORDER_WIDTH }
+        picCtrl: Pic, UndoStack: [], orgX: x - WINDOW_BORDER_WIDTH, orgY: y - WINDOW_BORDER_WIDTH }
 
     ; Setup dragging
     OnMessage(0x0201, WM_LBUTTONDOWN)
@@ -1121,7 +1376,7 @@ WM_LBUTTONDOWN(wParam, lParam, msg, hwnd) {
 
         if winInfo.IsMinimized {
             ; Restore original size.
-            WinMove(winInfo.orgX, winInfo.orgY, winInfo.w + BORDER_WIDTH * 2, winInfo.h + BORDER_WIDTH * 2, hwnd)
+            WinMove(winInfo.orgX, winInfo.orgY, winInfo.w + WINDOW_BORDER_WIDTH * 2, winInfo.h + WINDOW_BORDER_WIDTH * 2, hwnd)
             WinSetTransparent("Off", hwnd)
             winInfo.NumText.Visible := false
             winInfo.NumBg.Visible := false
@@ -1192,11 +1447,11 @@ SCW_ApplyAnnotation(hwnd, mode) {
             throw Error("Could not create undo image")
 
         if (mode == "Text") {
-            rectX := clickX - (winX + BORDER_WIDTH)
-            rectY := clickY - (winY + BORDER_WIDTH)
+            rectX := clickX - (winX + WINDOW_BORDER_WIDTH)
+            rectY := clickY - (winY + WINDOW_BORDER_WIDTH)
         } else {
-            rectX := rect.x - (winX + BORDER_WIDTH)
-            rectY := rect.y - (winY + BORDER_WIDTH)
+            rectX := rect.x - (winX + WINDOW_BORDER_WIDTH)
+            rectY := rect.y - (winY + WINDOW_BORDER_WIDTH)
         }
 
         pGraphics := Gdip_GraphicsFromImage(winInfo.pBitmap)
@@ -1208,7 +1463,7 @@ SCW_ApplyAnnotation(hwnd, mode) {
             if (status < 0)
                 throw Error("Gdip_TextToGraphics failed with status " status)
         } else if (mode == "Red") {
-            pPen := Gdip_CreatePen("0xFFFF0000", BORDER_WIDTH)
+            pPen := Gdip_CreatePen("0xFFFF0000", ANNOTATION_BORDER_WIDTH)
             if !pPen
                 throw Error("Could not create pen")
             Gdip_DrawRectangle(pGraphics, pPen, rectX, rectY, rect.w, rect.h)
@@ -1283,6 +1538,15 @@ SCW_Win2Clipboard() {
     CopyBitmapToClipboard(ClipWins[hwnd].pBitmap)
 }
 
+SCW_SetWidthAndCopy(width) {
+    hwnd := WinExist("A")
+    if !ClipWins.Has(hwnd)
+        return
+
+    settingsSaved := SetClipWidth(width)
+    CopyBitmapToClipboard(ClipWins[hwnd].pBitmap, settingsSaved)
+}
+
 SCW_Win2File() {
     hwnd := WinExist("A")
     if !ClipWins.Has(hwnd)
@@ -1291,61 +1555,61 @@ SCW_Win2File() {
     SaveBitmapToDesktop(ClipWins[hwnd].pBitmap)
 }
 
-CopyBitmapToClipboard(pBitmap) {
-    global CLIP_SCALE
-    pBordered := 0
-    pScaled := 0
+CopyBitmapToClipboard(pBitmap, settingsSaved := true) {
+    global CLIP_WIDTH, COPY_OUTLINE_ENABLED, JPG_QUALITY
+    pOutput := 0
     try {
         if !pBitmap
             throw Error("Invalid bitmap")
 
-        if (CLIP_SCALE != 1.0) {
-            pScaled := ResizeBitmap(pBitmap, CLIP_SCALE)
-            if !pScaled
-                throw Error("Could not resize image")
-            pBordered := AddBorderToBitmap(pScaled)
-        } else {
-            pBordered := AddBorderToBitmap(pBitmap)
-        }
-        if !pBordered
+        pOutput := CreateOutputBitmap(pBitmap, CLIP_WIDTH, COPY_OUTLINE_ENABLED)
+        if !pOutput
             throw Error("Could not prepare image")
 
-        Gdip_SetBitmapToClipboard(pBordered)
-        finalW := Gdip_GetImageWidth(pBordered)
-        finalH := Gdip_GetImageHeight(pBordered)
-        ToolTip("✅ 캡처 완료 (" finalW "×" finalH ") + 클립보드 복사`r`n✅ Copied to clipboard (" finalW "x" finalH ")")
-        SetTimer(() => ToolTip(), -2000)
+        Gdip_SetBitmapToClipboard(pOutput)
+        finalW := Gdip_GetImageWidth(pOutput)
+        finalH := Gdip_GetImageHeight(pOutput)
+        jpegBytes := GetEstimatedJpegSize(pOutput, JPG_QUALITY)
+        sizeText := jpegBytes >= 0 ? Format("{:.2f} MB", jpegBytes / 1048576) : "확인 불가"
+        outlineText := COPY_OUTLINE_ENABLED ? "ON" : "OFF"
+        saveWarning := settingsSaved ? "" : "`r`n⚠️ 가로폭 설정을 Registry에 저장하지 못했습니다."
+        ToolTip("✅ 클립보드 복사 완료: " finalW "×" finalH
+            "`r`nJPG 예상 " sizeText " (품질 " JPG_QUALITY ") | Outline " outlineText saveWarning)
+        SetTimer(() => ToolTip(), -3000)
     } catch as e {
         ToolTip("⚠️ 클립보드 복사 실패: " ShortErrorMessage(e.Message) "`r`n⚠️ Copy to clipboard failed.")
         SetTimer(() => ToolTip(), -3500)
     } finally {
-        if pScaled
-            Gdip_DisposeImage(pScaled)
-        if pBordered
-            Gdip_DisposeImage(pBordered)
+        if pOutput
+            Gdip_DisposeImage(pOutput)
     }
 }
 
 SaveBitmapToDesktop(pBitmap) {
-    pBordered := 0
+    global CLIP_WIDTH, COPY_OUTLINE_ENABLED, JPG_QUALITY
+    pOutput := 0
     try {
         if !pBitmap
             throw Error("Invalid bitmap")
-        pBordered := AddBorderToBitmap(pBitmap)
-        if !pBordered
+        pOutput := CreateOutputBitmap(pBitmap, CLIP_WIDTH, COPY_OUTLINE_ENABLED)
+        if !pOutput
             throw Error("Could not prepare image")
         TodayDate := FormatTime(, "yyyy-MM-dd_HHmmss")
-        FileOut := A_Desktop "\" TodayDate ".PNG"
-        if !SafeSaveBitmapToFile(pBordered, FileOut)
-            throw Error("Could not save PNG file")
-        ToolTip("✅ 바탕화면에 저장 완료`r`n✅ Saved to Desktop:`r`n" FileOut)
+        FileOut := A_Desktop "\" TodayDate ".jpg"
+        if !SafeSaveBitmapToFile(pOutput, FileOut, JPG_QUALITY)
+            throw Error("Could not save JPG file")
+        finalW := Gdip_GetImageWidth(pOutput)
+        finalH := Gdip_GetImageHeight(pOutput)
+        fileBytes := FileGetSize(FileOut)
+        ToolTip("✅ JPG 저장 완료: " finalW "×" finalH " | " Format("{:.2f} MB", fileBytes / 1048576)
+            "`r`n" FileOut)
         SetTimer(() => ToolTip(), -3000)
     } catch as e {
         ToolTip("⚠️ 바탕화면 저장 실패: " ShortErrorMessage(e.Message) "`r`n⚠️ Save to Desktop failed.")
         SetTimer(() => ToolTip(), -3500)
     } finally {
-        if pBordered
-            Gdip_DisposeImage(pBordered)
+        if pOutput
+            Gdip_DisposeImage(pOutput)
     }
 }
 
@@ -1439,15 +1703,19 @@ MenuHandler(ItemName, ItemPos, MyMenu) {
     }
 }
 
-; ── Image-border helper for clipboard/save output (1px solid black) ──
-AddBorderToBitmap(pBitmap) {
+; ── Shared resize and optional-outline pipeline for clipboard/save output ──
+CreateOutputBitmap(pBitmap, targetWidth, addOutline) {
     if !pBitmap
         return 0
     w := Gdip_GetImageWidth(pBitmap)
     h := Gdip_GetImageHeight(pBitmap)
     if (w <= 0 || h <= 0)
         return 0
-    pNew := Gdip_CreateBitmap(w, h)
+
+    targetWidth := NormalizeClipWidth(targetWidth)
+    outputW := targetWidth == 0 ? w : targetWidth
+    outputH := Max(1, Round(h * outputW / w))
+    pNew := Gdip_CreateBitmap(outputW, outputH)
     if !pNew
         return 0
     pGraphics := Gdip_GraphicsFromImage(pNew)
@@ -1455,14 +1723,69 @@ AddBorderToBitmap(pBitmap) {
         Gdip_DisposeImage(pNew)
         return 0
     }
-    Gdip_DrawImage(pGraphics, pBitmap, 0, 0, w, h)
-    pPen := Gdip_CreatePen("0xFF000000", 1)
-    if pPen {
-        Gdip_DrawRectangle(pGraphics, pPen, 0, 0, w - 1, h - 1)
+
+    Gdip_SetInterpolationMode(pGraphics, 7) ; 7 = HighQualityBicubic
+    Gdip_SetCompositingMode(pGraphics, 1) ; 1 = SourceCopy
+    if DrawResizedImageWithEdgeWrap(pGraphics, pBitmap, outputW, outputH, w, h) != 0 {
+        Gdip_DeleteGraphics(pGraphics)
+        Gdip_DisposeImage(pNew)
+        return 0
+    }
+
+    if addOutline {
+        pPen := Gdip_CreatePen("0xFF000000", 1)
+        if !pPen {
+            Gdip_DeleteGraphics(pGraphics)
+            Gdip_DisposeImage(pNew)
+            return 0
+        }
+        Gdip_DrawRectangle(pGraphics, pPen, 0, 0, outputW - 1, outputH - 1)
         Gdip_DeletePen(pPen)
     }
     Gdip_DeleteGraphics(pGraphics)
     return pNew
+}
+
+DrawResizedImageWithEdgeWrap(pGraphics, pBitmap, destW, destH, sourceW, sourceH) {
+    imageAttr := 0
+    status := DllCall("gdiplus\GdipCreateImageAttributes", "UPtr*", &imageAttr)
+    if (status != 0 || !imageAttr)
+        return Gdip_DrawImage(pGraphics, pBitmap, 0, 0, destW, destH, 0, 0, sourceW, sourceH)
+
+    try {
+        ; TileFlipXY extends edge pixels for high-quality resizing without transparent seams.
+        status := DllCall("gdiplus\GdipSetImageAttributesWrapMode", "UPtr", imageAttr, "Int", 3, "UInt", 0, "Int", 0)
+        if (status != 0)
+            return status
+        return DllCall("gdiplus\GdipDrawImageRectRect", "UPtr", pGraphics, "UPtr", pBitmap,
+            "Float", 0, "Float", 0, "Float", destW, "Float", destH,
+            "Float", 0, "Float", 0, "Float", sourceW, "Float", sourceH,
+            "Int", 2, "UPtr", imageAttr, "UPtr", 0, "UPtr", 0)
+    } finally {
+        Gdip_DisposeImageAttributes(imageAttr)
+    }
+}
+
+GetEstimatedJpegSize(pBitmap, quality) {
+    if !pBitmap
+        return -1
+
+    estimateDir := A_Temp "\ClipOCR-Pro"
+    estimateFile := estimateDir "\jpeg_estimate_" DllCall("GetCurrentProcessId") "_" A_TickCount ".jpg"
+    try {
+        if !DirExist(estimateDir)
+            DirCreate(estimateDir)
+        if !SafeSaveBitmapToFile(pBitmap, estimateFile, quality)
+            return -1
+        return FileGetSize(estimateFile)
+    } catch {
+        return -1
+    } finally {
+        try {
+            if FileExist(estimateFile)
+                FileDelete(estimateFile)
+        }
+    }
 }
 
 UriEncode(Uri) {
@@ -1480,85 +1803,67 @@ UriEncode(Uri) {
     return Res
 }
 
-; ── Clipboard image resize helper ──
-ResizeBitmap(pBitmap, scale) {
-    if !pBitmap
-        return 0
-    scale := NormalizeClipScale(scale)
-    w := Gdip_GetImageWidth(pBitmap)
-    h := Gdip_GetImageHeight(pBitmap)
-    if (w <= 0 || h <= 0)
-        return 0
-    newW := Round(w * scale)
-    newH := Round(h * scale)
-    if (newW <= 0 || newH <= 0)
-        return 0
-
-    pNew := Gdip_CreateBitmap(newW, newH)
-    if !pNew
-        return 0
-    pGraphics := Gdip_GraphicsFromImage(pNew)
-    if !pGraphics {
-        Gdip_DisposeImage(pNew)
-        return 0
-    }
-    Gdip_SetInterpolationMode(pGraphics, 7) ; 7 = HighQualityBicubic
-    Gdip_DrawImage(pGraphics, pBitmap, 0, 0, newW, newH, 0, 0, w, h)
-    Gdip_DeleteGraphics(pGraphics)
-    return pNew
-}
-
-; ── Scale-menu update and persistence ──
-SetClipScale(scale) {
-    global CLIP_SCALE, REG_PATH
-    scale := NormalizeClipScale(scale)
-    CLIP_SCALE := scale
-    saved := SafeRegWriteString(scale, REG_PATH, "Scale")
-    UpdateScaleMenu()
+; ── Clipboard-width menu update and persistence ──
+SetClipWidth(width) {
+    global CLIP_WIDTH, REG_PATH
+    width := NormalizeClipWidth(width)
+    CLIP_WIDTH := width
+    saved := SafeRegWriteString(width, REG_PATH, "ClipboardWidth")
+    UpdateWidthMenu()
     return saved
 }
 
-UpdateScaleMenu() {
-    global CLIP_SCALE
-    ScaleMenu.Uncheck("50%")
-    ScaleMenu.Uncheck("60%")
-    ScaleMenu.Uncheck("70%")
-    ScaleMenu.Uncheck("80%")
-    ScaleMenu.Uncheck("90%")
-    ScaleMenu.Uncheck("100%")
-    ScaleMenu.Uncheck("150%")
-
-    if (CLIP_SCALE == 0.5)
-        ScaleMenu.Check("50%")
-    else if (CLIP_SCALE == 0.6)
-        ScaleMenu.Check("60%")
-    else if (CLIP_SCALE == 0.7)
-        ScaleMenu.Check("70%")
-    else if (CLIP_SCALE == 0.8)
-        ScaleMenu.Check("80%")
-    else if (CLIP_SCALE == 0.9)
-        ScaleMenu.Check("90%")
-    else if (CLIP_SCALE == 1.5)
-        ScaleMenu.Check("150%")
-    else
-        ScaleMenu.Check("100%")
+SetCopyOutline(enabled) {
+    global COPY_OUTLINE_ENABLED, REG_PATH
+    COPY_OUTLINE_ENABLED := enabled ? true : false
+    return SafeRegWriteString(COPY_OUTLINE_ENABLED ? 1 : 0, REG_PATH, "CopyOutline")
 }
 
-GetScaleLabels() {
-    return ["50%", "60%", "70%", "80%", "90%", "100%", "150%"]
+UpdateWidthMenu() {
+    global CLIP_WIDTH
+    for _, width in GetClipWidths()
+        WidthMenu.Uncheck(GetClipWidthMenuLabel(width))
+    WidthMenu.Check(GetClipWidthMenuLabel(CLIP_WIDTH))
 }
 
-GetScaleIndex(scale) {
-    scales := [0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.5]
-    for index, value in scales {
-        if (Abs(scale - value) < 0.001)
+GetClipWidths() {
+    return [0, 400, 600, 800, 1000, 1200, 1400, 1600]
+}
+
+GetClipWidthShortcutNumber(width) {
+    if (width == 0)
+        return 0
+    return width // 200 - 1
+}
+
+GetClipWidthMenuLabel(width) {
+    if (width == 0)
+        return "Original Size (Ctrl+0)"
+    return width " px (Ctrl+" GetClipWidthShortcutNumber(width) ")"
+}
+
+GetClipWidthLabels() {
+    labels := []
+    for _, width in GetClipWidths()
+        labels.Push(GetClipWidthMenuLabel(width))
+    return labels
+}
+
+GetClipWidthIndex(width) {
+    width := NormalizeClipWidth(width)
+    for index, value in GetClipWidths() {
+        if (width == value)
             return index
     }
-    return 6
+    return 5
 }
 
-GetScaleFromLabel(label) {
-    return Float(StrReplace(label, "%")) / 100
+GetClipWidthFromLabel(label) {
+    if InStr(label, "Original Size")
+        return 0
+    if RegExMatch(label, "^(\d+)", &match)
+        return NormalizeClipWidth(match[1])
+    return 1000
 }
 
 GetTextTranslateLangOptions() {
@@ -1698,6 +2003,199 @@ UpdateTrayTextTranslateMenuLabel() {
     TRAY_TEXT_TRANSLATE_ITEM := newItem
 }
 
+AttachGithubUpdateControls(statusCtrl, detailCtrl, updateBtn, dashboardHwnd) {
+    global UPDATE_CHECK_STATE
+    UPDATE_CHECK_STATE.statusCtrl := statusCtrl
+    UPDATE_CHECK_STATE.detailCtrl := detailCtrl
+    UPDATE_CHECK_STATE.updateBtn := updateBtn
+    UPDATE_CHECK_STATE.dashboardHwnd := dashboardHwnd
+    RenderGithubUpdateState()
+}
+
+DetachGithubUpdateControls(dashboardHwnd) {
+    global UPDATE_CHECK_STATE
+    if (UPDATE_CHECK_STATE.dashboardHwnd != dashboardHwnd)
+        return
+    UPDATE_CHECK_STATE.statusCtrl := 0
+    UPDATE_CHECK_STATE.detailCtrl := 0
+    UPDATE_CHECK_STATE.updateBtn := 0
+    UPDATE_CHECK_STATE.dashboardHwnd := 0
+}
+
+StartGithubUpdateCheck(force := false) {
+    global UPDATE_CHECK_STATE, GITHUB_LATEST_RELEASE_API, GITHUB_RELEASES_URL, APP_NAME, APP_VERSION
+
+    if (UPDATE_CHECK_STATE.status == "checking" && !force) {
+        RenderGithubUpdateState()
+        return
+    }
+    if (!force && UPDATE_CHECK_STATE.status != "idle") {
+        RenderGithubUpdateState()
+        return
+    }
+
+    if (UPDATE_CHECK_STATE.status == "checking" && IsObject(UPDATE_CHECK_STATE.request))
+        try UPDATE_CHECK_STATE.request.Abort()
+
+    UPDATE_CHECK_STATE.status := "checking"
+    UPDATE_CHECK_STATE.latestVersion := ""
+    UPDATE_CHECK_STATE.releaseUrl := GITHUB_RELEASES_URL
+    UPDATE_CHECK_STATE.startedTick := A_TickCount
+    RenderGithubUpdateState()
+
+    try {
+        request := ComObject("WinHttp.WinHttpRequest.5.1")
+        request.SetTimeouts(3000, 3000, 5000, 5000)
+        request.Open("GET", GITHUB_LATEST_RELEASE_API, true)
+        request.SetRequestHeader("User-Agent", APP_NAME "/" APP_VERSION)
+        request.SetRequestHeader("Accept", "application/vnd.github+json")
+        request.Send()
+        UPDATE_CHECK_STATE.request := request
+        SetTimer(PollGithubUpdateCheck, 200)
+    } catch {
+        FinishGithubUpdateCheckError()
+    }
+}
+
+PollGithubUpdateCheck() {
+    global UPDATE_CHECK_STATE, APP_VERSION
+    if (UPDATE_CHECK_STATE.status != "checking") {
+        SetTimer(PollGithubUpdateCheck, 0)
+        return
+    }
+
+    if (A_TickCount - UPDATE_CHECK_STATE.startedTick > 15000) {
+        if IsObject(UPDATE_CHECK_STATE.request)
+            try UPDATE_CHECK_STATE.request.Abort()
+        FinishGithubUpdateCheckError()
+        return
+    }
+
+    try {
+        if !UPDATE_CHECK_STATE.request.WaitForResponse(0)
+            return
+        if (UPDATE_CHECK_STATE.request.Status != 200) {
+            FinishGithubUpdateCheckError()
+            return
+        }
+
+        releaseInfo := ParseGithubLatestRelease(UPDATE_CHECK_STATE.request.ResponseText)
+        if !IsObject(releaseInfo) {
+            FinishGithubUpdateCheckError()
+            return
+        }
+
+        UPDATE_CHECK_STATE.latestVersion := releaseInfo.version
+        UPDATE_CHECK_STATE.releaseUrl := releaseInfo.releaseUrl
+        UPDATE_CHECK_STATE.status := CompareSemanticVersions(releaseInfo.version, APP_VERSION) > 0 ? "update" : "current"
+        UPDATE_CHECK_STATE.request := 0
+        SetTimer(PollGithubUpdateCheck, 0)
+        RenderGithubUpdateState()
+    } catch {
+        ; Async requests can report a temporary timeout until the response is ready.
+    }
+}
+
+FinishGithubUpdateCheckError() {
+    global UPDATE_CHECK_STATE
+    SetTimer(PollGithubUpdateCheck, 0)
+    UPDATE_CHECK_STATE.status := "error"
+    UPDATE_CHECK_STATE.request := 0
+    RenderGithubUpdateState()
+}
+
+RenderGithubUpdateState() {
+    global UPDATE_CHECK_STATE, APP_VERSION
+    if (!IsObject(UPDATE_CHECK_STATE.statusCtrl) || !IsObject(UPDATE_CHECK_STATE.detailCtrl)
+        || !IsObject(UPDATE_CHECK_STATE.updateBtn))
+        return
+
+    try {
+        if (UPDATE_CHECK_STATE.status == "checking") {
+            UPDATE_CHECK_STATE.statusCtrl.Value := "Checking for updates..."
+            UPDATE_CHECK_STATE.detailCtrl.Value := "Current version: v" APP_VERSION
+        } else if (UPDATE_CHECK_STATE.status == "update") {
+            UPDATE_CHECK_STATE.statusCtrl.Value := "Update available: v" UPDATE_CHECK_STATE.latestVersion
+            UPDATE_CHECK_STATE.detailCtrl.Value := "Current v" APP_VERSION "  •  Latest v" UPDATE_CHECK_STATE.latestVersion
+        } else if (UPDATE_CHECK_STATE.status == "current") {
+            UPDATE_CHECK_STATE.statusCtrl.Value := "You're up to date"
+            UPDATE_CHECK_STATE.detailCtrl.Value := "Current v" APP_VERSION "  •  Latest v" UPDATE_CHECK_STATE.latestVersion
+        } else if (UPDATE_CHECK_STATE.status == "error") {
+            UPDATE_CHECK_STATE.statusCtrl.Value := "Update check unavailable"
+            UPDATE_CHECK_STATE.detailCtrl.Value := "Check your network connection and try again."
+        } else {
+            UPDATE_CHECK_STATE.statusCtrl.Value := "Update status: Not checked"
+            UPDATE_CHECK_STATE.detailCtrl.Value := "Current version: v" APP_VERSION
+        }
+        UPDATE_CHECK_STATE.updateBtn.Enabled := (UPDATE_CHECK_STATE.status == "update")
+    }
+}
+
+OpenAvailableGithubUpdate(*) {
+    global UPDATE_CHECK_STATE
+    if (UPDATE_CHECK_STATE.status != "update" || !IsTrustedGithubReleaseUrl(UPDATE_CHECK_STATE.releaseUrl))
+        return
+    try Run(UPDATE_CHECK_STATE.releaseUrl)
+}
+
+ParseGithubLatestRelease(jsonText) {
+    global GITHUB_RELEASES_URL
+    tagName := ""
+    releaseName := ""
+    releaseUrl := GITHUB_RELEASES_URL
+    tagPattern := '"tag_name"\s*:\s*"([^"]+)"'
+    namePattern := '"name"\s*:\s*"([^"]+)"'
+    urlPattern := '"html_url"\s*:\s*"([^"]+)"'
+
+    if RegExMatch(jsonText, tagPattern, &tagMatch)
+        tagName := DecodeGithubJsonString(tagMatch[1])
+    if RegExMatch(jsonText, namePattern, &nameMatch)
+        releaseName := DecodeGithubJsonString(nameMatch[1])
+    if RegExMatch(jsonText, urlPattern, &urlMatch) {
+        candidateUrl := DecodeGithubJsonString(urlMatch[1])
+        if IsTrustedGithubReleaseUrl(candidateUrl)
+            releaseUrl := candidateUrl
+    }
+
+    version := ExtractSemanticVersion(tagName)
+    if (version == "")
+        version := ExtractSemanticVersion(releaseName)
+    if (version == "" && RegExMatch(jsonText, "i)ClipOCR-Pro_v(\d+\.\d+\.\d+)\.(?:exe|zip)", &assetMatch))
+        version := assetMatch[1]
+    if (version == "")
+        return 0
+    return { version: version, releaseUrl: releaseUrl }
+}
+
+DecodeGithubJsonString(value) {
+    value := StrReplace(value, "\/", "/")
+    return StrReplace(value, "\u0026", "&")
+}
+
+ExtractSemanticVersion(value) {
+    if RegExMatch(value, "i)(?:^|[^\d])v?(\d+)\.(\d+)\.(\d+)(?:[^\d]|$)", &match)
+        return Integer(match[1]) "." Integer(match[2]) "." Integer(match[3])
+    return ""
+}
+
+CompareSemanticVersions(leftVersion, rightVersion) {
+    leftParts := StrSplit(leftVersion, ".")
+    rightParts := StrSplit(rightVersion, ".")
+    loop 3 {
+        leftValue := Integer(leftParts[A_Index])
+        rightValue := Integer(rightParts[A_Index])
+        if (leftValue > rightValue)
+            return 1
+        if (leftValue < rightValue)
+            return -1
+    }
+    return 0
+}
+
+IsTrustedGithubReleaseUrl(url) {
+    return RegExMatch(url, "i)^https://github\.com/KwangBeomPark/ClipOCR-Pro/releases(?:/|$)") > 0
+}
+
 SwitchDashboardPanel(tabIndex, TabGenBtn, TabTrnBtn, TabAbtBtn, GenPanel, TrnPanel, AbtPanel) {
     TabGenBtn.Opt("cGray +BackgroundTrans")
     TabGenBtn.Redraw()
@@ -1731,7 +2229,7 @@ SwitchDashboardPanel(tabIndex, TabGenBtn, TabTrnBtn, TabAbtBtn, GenPanel, TrnPan
     }
 }
 
-SaveDashboardSettings(StartupChk, ScaleCombo, FontSizeEdit, HotkeyCombo, LangCombo, LV_ImageLangs) {
+SaveDashboardSettings(StartupChk, WidthCombo, OutlineChk, FontSizeEdit, HotkeyCombo, LangCombo, LV_ImageLangs) {
     global IMAGE_TRANSLATE_LANGS, REG_PATH
     settingsSaved := true
 
@@ -1743,7 +2241,9 @@ SaveDashboardSettings(StartupChk, ScaleCombo, FontSizeEdit, HotkeyCombo, LangCom
             settingsSaved := false
     }
 
-    if !SetClipScale(GetScaleFromLabel(ScaleCombo.Text))
+    if !SetClipWidth(GetClipWidthFromLabel(WidthCombo.Text))
+        settingsSaved := false
+    if !SetCopyOutline(OutlineChk.Value)
         settingsSaved := false
     if !SetTextTranslateFontSize(FontSizeEdit.Value)
         settingsSaved := false
@@ -1774,7 +2274,7 @@ SaveDashboardSettings(StartupChk, ScaleCombo, FontSizeEdit, HotkeyCombo, LangCom
 }
 
 ShowDashboardDialog() {
-    global APP_NAME, APP_VERSION, DashboardHwnd, CLIP_SCALE, TEXT_TRANSLATE_LANG, TEXT_TRANSLATE_HOTKEY, TEXT_TRANSLATE_FONT_SIZE, IMAGE_TRANSLATE_LANGS, bmcBtnPath
+    global APP_NAME, APP_VERSION, DashboardHwnd, CLIP_WIDTH, COPY_OUTLINE_ENABLED, TEXT_TRANSLATE_LANG, TEXT_TRANSLATE_HOTKEY, TEXT_TRANSLATE_FONT_SIZE, IMAGE_TRANSLATE_LANGS, bmcBtnPath
 
     if (DashboardHwnd && WinExist("ahk_id " DashboardHwnd)) {
         WinActivate("ahk_id " DashboardHwnd)
@@ -1793,7 +2293,9 @@ ShowDashboardDialog() {
     CloseBtn.SetFont("s16 Bold")
 
     DestroyDash(*) {
-        global DashboardHwnd := 0
+        global DashboardHwnd
+        try DetachGithubUpdateControls(DashGui.Hwnd)
+        DashboardHwnd := 0
         DashGui.Destroy()
     }
     CloseBtn.OnEvent("Click", DestroyDash)
@@ -1823,28 +2325,32 @@ ShowDashboardDialog() {
     lbl1.SetFont("s10 Bold")
     GenPanel.Push(lbl1)
 
-    GenPanel.Push(DashGui.Add("Text", "x180 y94 w180 h22 +BackgroundTrans cCCCCCC", "Clipboard Image Size"))
-    ScaleCombo := DashGui.Add("DropDownList", "x380 y90 w150 Choose" GetScaleIndex(CLIP_SCALE), GetScaleLabels())
-    GenPanel.Push(ScaleCombo)
+    GenPanel.Push(DashGui.Add("Text", "x180 y94 w180 h22 +BackgroundTrans cCCCCCC", "Clipboard Image Width"))
+    WidthCombo := DashGui.Add("DropDownList", "x380 y90 w210 Choose" GetClipWidthIndex(CLIP_WIDTH), GetClipWidthLabels())
+    GenPanel.Push(WidthCombo)
 
-    GenPanel.Push(DashGui.Add("Text", "x180 y126 w580 h1 Background3F3F46", ""))
+    OutlineChk := DashGui.Add("CheckBox", "x180 y126 w580 h28 Background1E1E24 cCCCCCC" (COPY_OUTLINE_ENABLED ? " Checked" : ""),
+        " Add 1px black outline to copied/saved image")
+    GenPanel.Push(OutlineChk)
 
-    lblTextSize := DashGui.Add("Text", "x180 y145 w580 h22 +BackgroundTrans cFFFFFF", "Selected Text Translation")
+    GenPanel.Push(DashGui.Add("Text", "x180 y166 w580 h1 Background3F3F46", ""))
+
+    lblTextSize := DashGui.Add("Text", "x180 y185 w580 h22 +BackgroundTrans cFFFFFF", "Selected Text Translation")
     lblTextSize.SetFont("s10 Bold")
     GenPanel.Push(lblTextSize)
 
-    GenPanel.Push(DashGui.Add("Text", "x180 y178 w180 h22 +BackgroundTrans cCCCCCC", "Translate Font Size"))
-    FontSizeEdit := DashGui.Add("Edit", "x380 y174 w80 h24 Number", TEXT_TRANSLATE_FONT_SIZE)
+    GenPanel.Push(DashGui.Add("Text", "x180 y218 w180 h22 +BackgroundTrans cCCCCCC", "Translate Font Size"))
+    FontSizeEdit := DashGui.Add("Edit", "x380 y214 w80 h24 Number", TEXT_TRANSLATE_FONT_SIZE)
     GenPanel.Push(FontSizeEdit)
 
-    GenPanel.Push(DashGui.Add("Text", "x180 y214 w580 h1 Background3F3F46", ""))
+    GenPanel.Push(DashGui.Add("Text", "x180 y254 w580 h1 Background3F3F46", ""))
 
-    lbl2 := DashGui.Add("Text", "x180 y235 w580 h22 +BackgroundTrans cFFFFFF", "System Settings")
+    lbl2 := DashGui.Add("Text", "x180 y275 w580 h22 +BackgroundTrans cFFFFFF", "System Settings")
     lbl2.SetFont("s10 Bold")
     GenPanel.Push(lbl2)
-    GenPanel.Push(DashGui.Add("Text", "x180 y265 w580 h52 Background2A2D3C", ""))
+    GenPanel.Push(DashGui.Add("Text", "x180 y305 w580 h52 Background2A2D3C", ""))
     isStartup := IsStartupEnabled()
-    StartupChk := DashGui.Add("CheckBox", "x195 y275 w550 h30 Background2A2D3C cWhite" (isStartup ? " Checked" : ""), "  Run app when Windows starts")
+    StartupChk := DashGui.Add("CheckBox", "x195 y315 w550 h30 Background2A2D3C cWhite" (isStartup ? " Checked" : ""), "  Run app when Windows starts")
     StartupChk.SetFont("s10 Bold", "Segoe UI")
     GenPanel.Push(StartupChk)
 
@@ -1944,27 +2450,37 @@ ShowDashboardDialog() {
 
     ; 3. About Panel
     AbtPanel := []
-    lbl5 := DashGui.Add("Text", "x180 y60 w430 h35 +BackgroundTrans cWhite", APP_NAME)
+    lbl5 := DashGui.Add("Text", "x180 y60 w430 h25 +BackgroundTrans cWhite", APP_NAME)
     lbl5.SetFont("s10 Bold")
     AbtPanel.Push(lbl5)
 
-    AbtPanel.Push(DashGui.Add("Text", "x180 y100 w580 h20 +BackgroundTrans cGray", "Version " APP_VERSION " • Screen Capture, Annotation & Translation Tool"))
+    AbtPanel.Push(DashGui.Add("Text", "x180 y90 w580 h20 +BackgroundTrans cGray", "Version " APP_VERSION " • Screen Capture, Annotation & Translation Tool"))
 
+    AbtPanel.Push(DashGui.Add("Text", "x180 y120 w580 h78 Background27272A", ""))
+    UpdateStatusText := DashGui.Add("Text", "x195 y133 w300 h22 +BackgroundTrans cFFFFFF", "Update status: Not checked")
+    UpdateStatusText.SetFont("s10 Bold", "Segoe UI")
+    UpdateDetailText := DashGui.Add("Text", "x195 y160 w300 h20 +BackgroundTrans cA0A0A0", "Current version: v" APP_VERSION)
+    CheckUpdateBtn := DashGui.Add("Button", "x505 y137 w105 h32", "Check Again")
+    ViewUpdateBtn := DashGui.Add("Button", "x620 y137 w125 h32 Disabled", "View Update")
+    AbtPanel.Push(UpdateStatusText)
+    AbtPanel.Push(UpdateDetailText)
+    AbtPanel.Push(CheckUpdateBtn)
+    AbtPanel.Push(ViewUpdateBtn)
 
-    AbtPanel.Push(DashGui.Add("Text", "x180 y130 w580 h1 Background3F3F46", ""))
+    AbtPanel.Push(DashGui.Add("Text", "x180 y210 w580 h1 Background3F3F46", ""))
 
-    AbtPanel.Push(DashGui.Add("Text", "x180 y150 w580 h120 Background27272A", ""))
+    AbtPanel.Push(DashGui.Add("Text", "x180 y222 w580 h82 Background27272A", ""))
 
-    lbl6 := DashGui.Add("Text", "x195 y160 w550 h20 +BackgroundTrans cWhite", "👤 Developer Info")
+    lbl6 := DashGui.Add("Text", "x195 y230 w550 h20 +BackgroundTrans cWhite", "👤 Developer Info")
     lbl6.SetFont("s10 Bold")
     AbtPanel.Push(lbl6)
-    AbtPanel.Push(DashGui.Add("Text", "x195 y185 w430 h20 +BackgroundTrans cCCCCCC", "Kwang Beom Park (Bob)"))
-    AbtPanel.Push(DashGui.Add("Text", "x195 y205 w430 h50 +BackgroundTrans cA0A0A0", "A finance professional passionate about office automation and daily productivity."))
+    AbtPanel.Push(DashGui.Add("Text", "x195 y255 w430 h20 +BackgroundTrans cCCCCCC", "Kwang Beom Park (Bob)"))
+    AbtPanel.Push(DashGui.Add("Text", "x195 y278 w430 h20 +BackgroundTrans cA0A0A0", "A finance professional passionate about office automation and daily productivity."))
 
     githubLoaded := false
     if FileExist(githubIconPath) {
         try {
-            GithubPic := DashGui.Add("Picture", "x650 y165 w64 h64 +BackgroundTrans", githubIconPath)
+            GithubPic := DashGui.Add("Picture", "x680 y238 w48 h48 +BackgroundTrans", githubIconPath)
             GithubPic.OnEvent("Click", (*) => Run("https://github.com/KwangBeomPark"))
             AbtPanel.Push(GithubPic)
             githubLoaded := true
@@ -1972,29 +2488,37 @@ ShowDashboardDialog() {
     }
 
     if !githubLoaded {
-        GithubLink := DashGui.Add("Link", "x650 y195 w90 h30 Center Background27272A", '<a href="https://github.com/KwangBeomPark" id="github">GitHub</a>')
+        GithubLink := DashGui.Add("Link", "x665 y255 w80 h30 Center Background27272A", '<a href="https://github.com/KwangBeomPark" id="github">GitHub</a>')
         AbtPanel.Push(GithubLink)
     }
 
-    AbtPanel.Push(DashGui.Add("Text", "x180 y285 w580 h135 Background2D2D35", ""))
-    AbtPanel.Push(DashGui.Add("Text", "x195 y295 w550 h20 +BackgroundTrans cFFDD00", "☕ Support This Project"))
-    AbtPanel.Push(DashGui.Add("Text", "x195 y320 w550 h40 +BackgroundTrans cE0E0E0", "If this tool helps reduce repetitive work, your support will encourage me to continue building more tools."))
+    AbtPanel.Push(DashGui.Add("Text", "x180 y316 w580 h104 Background2D2D35", ""))
+    AbtPanel.Push(DashGui.Add("Text", "x195 y326 w550 h20 +BackgroundTrans cFFDD00", "☕ Support This Project"))
+    AbtPanel.Push(DashGui.Add("Text", "x195 y350 w550 h28 +BackgroundTrans cE0E0E0", "If this tool helps reduce repetitive work, your support will encourage me to continue building more tools."))
 
     if FileExist(bmcBtnPath) {
-        BmcPic := DashGui.Add("Picture", "x382 y370 w176 h40 +BackgroundTrans", bmcBtnPath)
+        BmcPic := DashGui.Add("Picture", "x382 y378 w176 h36 +BackgroundTrans", bmcBtnPath)
         BmcPic.OnEvent("Click", (*) => Run("https://www.buymeacoffee.com/KBPark_Bob"))
         AbtPanel.Push(BmcPic)
     } else {
-        BmcLink := DashGui.Add("Link", "x195 y375 w550 h30 Center Background2D2D35 cYellow", '<a href="https://www.buymeacoffee.com/KBPark_Bob">☕ Click here to Support</a>')
+        BmcLink := DashGui.Add("Link", "x195 y382 w550 h28 Center Background2D2D35 cYellow", '<a href="https://www.buymeacoffee.com/KBPark_Bob">☕ Click here to Support</a>')
         AbtPanel.Push(BmcLink)
+    }
+
+    AttachGithubUpdateControls(UpdateStatusText, UpdateDetailText, ViewUpdateBtn, DashGui.Hwnd)
+    CheckUpdateBtn.OnEvent("Click", (*) => StartGithubUpdateCheck(true))
+    ViewUpdateBtn.OnEvent("Click", OpenAvailableGithubUpdate)
+
+    ShowAboutPanel(*) {
+        SwitchDashboardPanel(3, TabGenBtn, TabTrnBtn, TabAbtBtn, GenPanel, TrnPanel, AbtPanel)
+        StartGithubUpdateCheck()
     }
 
     TabGenBtn.OnEvent("Click", (*) => SwitchDashboardPanel(1, TabGenBtn, TabTrnBtn, TabAbtBtn, GenPanel, TrnPanel,
         AbtPanel))
     TabTrnBtn.OnEvent("Click", (*) => SwitchDashboardPanel(2, TabGenBtn, TabTrnBtn, TabAbtBtn, GenPanel, TrnPanel,
         AbtPanel))
-    TabAbtBtn.OnEvent("Click", (*) => SwitchDashboardPanel(3, TabGenBtn, TabTrnBtn, TabAbtBtn, GenPanel, TrnPanel,
-        AbtPanel))
+    TabAbtBtn.OnEvent("Click", ShowAboutPanel)
 
     ; --- Shared bottom buttons ---
     DashGui.Add("Text", "x160 y440 w620 h1 Background3F3F46", "") ; Top border divider
@@ -2002,7 +2526,7 @@ ShowDashboardDialog() {
     CancelBtn := DashGui.Add("Button", "x660 y455 w100 h32", "Cancel")
 
     SaveAllSettings(*) {
-        settingsSaved := SaveDashboardSettings(StartupChk, ScaleCombo, FontSizeEdit, HotkeyCombo, LangCombo, LV_ImageLangs)
+        settingsSaved := SaveDashboardSettings(StartupChk, WidthCombo, OutlineChk, FontSizeEdit, HotkeyCombo, LangCombo, LV_ImageLangs)
         if settingsSaved
             ToolTip("✅ All settings saved.")
         else
@@ -2020,21 +2544,8 @@ ShowDashboardDialog() {
     ; Initial tab setup
     SwitchDashboardPanel(1, TabGenBtn, TabTrnBtn, TabAbtBtn, GenPanel, TrnPanel, AbtPanel)
 
-    ; ── Center the settings window on the monitor containing the mouse cursor ──
-    CoordMode("Mouse", "Screen")
-    MouseGetPos(&mx, &my)
-    monLeft := 0, monTop := 0, monRight := A_ScreenWidth, monBottom := A_ScreenHeight
-    loop MonitorGetCount() {
-        MonitorGetWorkArea(A_Index, &mLeft, &mTop, &mRight, &mBottom)
-        if (mx >= mLeft && mx <= mRight && my >= mTop && my <= mBottom) {
-            monLeft := mLeft, monTop := mTop, monRight := mRight, monBottom := mBottom
-            break
-        }
-    }
-    centerX := monLeft + (monRight - monLeft - 780) // 2
-    centerY := monTop + (monBottom - monTop - 500) // 2
-
-    DashGui.Show("x" centerX " y" centerY " w780 h500")
+    settingsPos := GetCenteredPositionOnMouseMonitor(780, 500)
+    DashGui.Show("x" settingsPos.x " y" settingsPos.y " w780 h500")
     DashboardHwnd := DashGui.Hwnd
 }
 
@@ -2057,7 +2568,7 @@ SCW_MinimizeAll() {
 SCW_RestoreAll() {
     for hwnd, winInfo in ClipWins {
         if winInfo.IsMinimized {
-            WinMove(winInfo.orgX, winInfo.orgY, winInfo.w + BORDER_WIDTH * 2, winInfo.h + BORDER_WIDTH * 2, hwnd)
+            WinMove(winInfo.orgX, winInfo.orgY, winInfo.w + WINDOW_BORDER_WIDTH * 2, winInfo.h + WINDOW_BORDER_WIDTH * 2, hwnd)
             WinSetTransparent("Off", hwnd)
             winInfo.NumText.Visible := false
             winInfo.NumBg.Visible := false
@@ -2158,6 +2669,9 @@ ShowManualDialog() {
     global ManualHwnd
 
     if (ManualHwnd && WinExist("ahk_id " ManualHwnd)) {
+        WinGetPos(, , &manualW, &manualH, "ahk_id " ManualHwnd)
+        manualPos := GetCenteredPositionOnMouseMonitor(manualW, manualH)
+        WinMove(manualPos.x, manualPos.y, , , "ahk_id " ManualHwnd)
         WinActivate("ahk_id " ManualHwnd)
         return
     }
@@ -2218,7 +2732,8 @@ ShowManualDialog() {
     }
     ManGui.OnEvent("Size", OnManualResize)
 
-    ManGui.Show("w580 h894")
+    manualPos := GetCenteredPositionOnMouseMonitor(580, 894)
+    ManGui.Show("x" manualPos.x " y" manualPos.y " w580 h894")
     ManualHwnd := ManGui.Hwnd
 }
 
@@ -2241,6 +2756,10 @@ GetManualText(lang) {
                - 번역 결과 창에서 언어 콤보박스로 EN, KO, PL 등 원하는 언어로 전환 가능합니다.
                - Settings에서 단축키와 기본 번역 언어를 변경할 수 있습니다.
             
+            3. 📧 Outlook 웹메일 용량 추정  (Ctrl + Win + 0)
+               - 작성 중인 메일 본문 안을 클릭한 상태에서 실행합니다.
+               - 첨부파일을 제외한 본문+제목/헤더의 보수적 예상 크기를 MB로 표시합니다.
+            
             
             📸 캡처 창 기능
             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -2255,7 +2774,9 @@ GetManualText(lang) {
               ↩️ Ctrl + Z: 그리기 실행 취소
             
               📋 Ctrl + C: 클립보드에 이미지 복사
-              💾 Ctrl + S: 바탕화면에 PNG 저장
+              📐 Ctrl + 0: Original Size로 설정 후 원본 크기 복사
+              📐 Ctrl + 1~7: 가로 400~1600px로 설정 후 즉시 복사
+              💾 Ctrl + S: 현재 출력 설정으로 바탕화면에 JPG 저장
               Esc: 현재 캡처 창 닫기
               Ctrl + Esc: 모든 캡처 창 닫기
             
@@ -2271,7 +2792,9 @@ GetManualText(lang) {
             ⚙️ 설정 (Settings)
             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             
-            • 클립보드 이미지 크기: 50% ~ 150%
+            • 클립보드 이미지 크기: Original Size 또는 400~1600px
+            • 복사/저장 이미지 검정 아웃라인: 켜기/끄기
+            • About 탭: GitHub 최신 버전 확인 및 릴리즈 페이지 열기
             • 번역 단축키: Win+CapsLock 등 5가지 옵션
             • 번역 결과 언어: 한국어, 영어, 폴란드어 등 유럽 언어 49개 지원
         )"
@@ -2295,6 +2818,10 @@ GetManualText(lang) {
                - W oknie tłumaczenia możesz zmienić język docelowy (EN, KO, PL itp.).
                - Skrót klawiszowy i domyślny język można zmienić w Ustawieniach.
             
+            3. 📧 Szacowanie rozmiaru poczty Outlook  (Ctrl + Win + 0)
+               - Kliknij treść tworzonej wiadomości przed użyciem skrótu.
+               - Pokazuje ostrożny szacunek MB bez załączników.
+            
             
             📸 Funkcje okna przechwytywania
             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -2309,7 +2836,9 @@ GetManualText(lang) {
               ↩️ Ctrl + Z: cofnij rysowanie
             
               📋 Ctrl + C: kopiuj do schowka
-              💾 Ctrl + S: zapisz na pulpicie
+              📐 Ctrl + 0: ustaw oryginalny rozmiar i skopiuj
+              📐 Ctrl + 1~7: ustaw szerokość 400~1600 px i skopiuj
+              💾 Ctrl + S: zapisz JPG na pulpicie
               Esc: zamknij bieżące okno
               Ctrl + Esc: zamknij wszystkie okna
             
@@ -2325,7 +2854,9 @@ GetManualText(lang) {
             ⚙️ Ustawienia
             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             
-            • Rozmiar obrazu w schowku: 50% ~ 150%
+            • Rozmiar obrazu: oryginalny lub szerokość 400~1600 px
+            • Czarny kontur kopiowanego/zapisanego obrazu: wł./wył.
+            • Karta About: sprawdzanie aktualizacji GitHub
             • Skrót do tłumaczenia: 5 opcji
             • Język tłumaczenia: 49 języków europejskich
         )"
@@ -2349,6 +2880,10 @@ GetManualText(lang) {
                - Im Übersetzungsfenster können Sie die Zielsprache wechseln (EN, KO, PL usw.).
                - Tastenkürzel und Standardsprache können in den Einstellungen geändert werden.
             
+            3. 📧 Outlook-Mailgröße schätzen  (Strg + Win + 0)
+               - Klicken Sie vor dem Start in den Nachrichtentext.
+               - Zeigt eine konservative MB-Schätzung ohne Anhänge.
+            
             
             📸 Funktionen des Aufnahmefensters
             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -2363,7 +2898,9 @@ GetManualText(lang) {
               ↩️ Strg + Z: Zeichnung rückgängig machen
             
               📋 Strg + C: In Zwischenablage kopieren
-              💾 Strg + S: Auf Desktop speichern
+              📐 Strg + 0: Originalgröße einstellen und kopieren
+              📐 Strg + 1~7: 400~1600 px einstellen und kopieren
+              💾 Strg + S: JPG auf dem Desktop speichern
               Esc: Aktuelles Fenster schließen
               Strg + Esc: Alle Fenster schließen
             
@@ -2379,7 +2916,9 @@ GetManualText(lang) {
             ⚙️ Einstellungen
             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             
-            • Zwischenablage-Bildgröße: 50% ~ 150%
+            • Bildgröße: Originalgröße oder 400~1600 px Breite
+            • Schwarze Bildkontur beim Kopieren/Speichern: Ein/Aus
+            • About-Tab: GitHub-Updates prüfen
             • Übersetzungs-Tastenkürzel: 5 Optionen
             • Übersetzungssprache: 49 europäische Sprachen
         )"
@@ -2403,6 +2942,10 @@ GetManualText(lang) {
                - Dans la fenêtre de traduction, changez la langue cible (EN, KO, PL, etc.).
                - Le raccourci et la langue par défaut sont modifiables dans les Paramètres.
             
+            3. 📧 Estimer la taille du mail Outlook  (Ctrl + Win + 0)
+               - Cliquez dans le corps du message avant d'utiliser le raccourci.
+               - Affiche une estimation prudente en Mo, pièces jointes exclues.
+            
             
             📸 Fonctions de la fenêtre de capture
             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -2417,7 +2960,9 @@ GetManualText(lang) {
               ↩️ Ctrl + Z : annuler le dessin
             
               📋 Ctrl + C : copier dans le presse-papiers
-              💾 Ctrl + S : enregistrer sur le Bureau
+              📐 Ctrl + 0 : taille originale et copie
+              📐 Ctrl + 1~7 : régler 400~1600 px et copier
+              💾 Ctrl + S : enregistrer en JPG sur le Bureau
               Esc : fermer la fenêtre actuelle
               Ctrl + Esc : fermer toutes les fenêtres
             
@@ -2433,7 +2978,9 @@ GetManualText(lang) {
             ⚙️ Paramètres
             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             
-            • Taille de l'image : 50% ~ 150%
+            • Taille de l'image : originale ou largeur 400~1600 px
+            • Contour noir à la copie/enregistrement : activé/désactivé
+            • Onglet About : vérifier les mises à jour GitHub
             • Raccourci de traduction : 5 options
             • Langue de traduction : 49 langues européennes
         )"
@@ -2457,6 +3004,10 @@ GetManualText(lang) {
                - En la ventana de traducción, cambie el idioma de destino (EN, KO, PL, etc.).
                - El atajo y el idioma predeterminado se pueden cambiar en Configuración.
             
+            3. 📧 Estimar el tamaño del correo de Outlook  (Ctrl + Win + 0)
+               - Haga clic en el cuerpo del mensaje antes de usar el atajo.
+               - Muestra una estimación prudente en MB sin archivos adjuntos.
+            
             
             📸 Funciones de la ventana de captura
             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -2471,7 +3022,9 @@ GetManualText(lang) {
               ↩️ Ctrl + Z: deshacer dibujo
             
               📋 Ctrl + C: copiar al portapapeles
-              💾 Ctrl + S: guardar en el escritorio
+              📐 Ctrl + 0: tamaño original y copiar
+              📐 Ctrl + 1~7: ajustar 400~1600 px y copiar
+              💾 Ctrl + S: guardar JPG en el escritorio
               Esc: cerrar ventana actual
               Ctrl + Esc: cerrar todas las ventanas
             
@@ -2487,7 +3040,9 @@ GetManualText(lang) {
             ⚙️ Configuración
             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             
-            • Tamaño de imagen: 50% ~ 150%
+            • Tamaño de imagen: original o ancho 400~1600 px
+            • Contorno negro al copiar/guardar: activado/desactivado
+            • Pestaña About: buscar actualizaciones de GitHub
             • Atajo de traducción: 5 opciones
             • Idioma de traducción: 49 idiomas europeos
         )"
@@ -2511,6 +3066,10 @@ GetManualText(lang) {
            - In the translation window, switch target language (EN, KO, PL, etc.) via the combo box.
            - The hotkey and default language can be changed in Settings.
         
+        3. 📧 Estimate Outlook Web Mail Size  (Ctrl + Win + 0)
+           - Click inside the message body before using the hotkey.
+           - Shows a conservative MB estimate excluding attachments.
+        
         
         📸 Capture Window Features
         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -2525,7 +3084,9 @@ GetManualText(lang) {
           ↩️ Ctrl + Z: Undo drawing
         
           📋 Ctrl + C: Copy image to clipboard
-          💾 Ctrl + S: Save PNG to Desktop
+          📐 Ctrl + 0: Set Original Size and copy at original dimensions
+          📐 Ctrl + 1~7: Set width to 400~1600 px and copy immediately
+          💾 Ctrl + S: Save JPG to Desktop with current output settings
           Esc: Close current capture window
           Ctrl + Esc: Close all capture windows
         
@@ -2541,7 +3102,9 @@ GetManualText(lang) {
         ⚙️ Settings
         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         
-        • Clipboard image scale: 50% ~ 150%
+        • Clipboard image size: Original Size or 400~1600 px width
+        • Black outline for copied/saved images: On/Off
+        • About tab: Check GitHub updates and open the release page
         • Translation hotkey: 5 options available
         • Translation language: 49 European languages supported
     )"
