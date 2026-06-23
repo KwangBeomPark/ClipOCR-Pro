@@ -67,7 +67,7 @@ If no release file is available yet, please build or run the source using AutoHo
 ## 📖 User Guide
 
 <p align="center">
-  <img src="./assets/manual.png" width="900" alt="ClipOCR-Pro Manual Infographic">
+  <img src="./assets/manual1.png" width="900" alt="ClipOCR-Pro Manual Infographic">
 </p>
 
 ✔ **Capture Window**: Capture a selected screen area and keep it as an always-on-top floating image.  
