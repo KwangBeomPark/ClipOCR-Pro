@@ -25,7 +25,8 @@ It is designed especially for finance, accounting, sales administration, credit 
 - **🖍️ Quick Annotation**: Mark captured images with red boxes, highlights, and simple visual notes during review.
 - **🌐 Selected Text Translation**: Translate selected text using the configured translation workflow.
 - **🖼️ Image Translation Workflow**: Send captured images to Google Image Translation when needed for email attachments, scanned documents, and overseas evidence.
-- **📐 Image Resize & Copy**: Resize captured images based on app settings before copying or pasting into documents, emails, or reports.
+- **📐 Image Resize & Copy**: Resize captured images to a configured width from 400 to 1600 px before pasting them into documents, emails, or reports.
+- **📧 Outlook Web Mail Estimate**: Estimate the attachment-free message size in MB from copied body data plus conservative subject, header, and encoding allowances.
 - **🖥️ Multi-Monitor Support**: Use capture and floating windows across multi-monitor office environments.
 
 ---
@@ -85,9 +86,13 @@ If no release file is available yet, please build or run the source using AutoHo
 |---------|----------|
 | `Win + Drag` | Capture a screen area and keep it floating on top |
 | `Win + CapsLock` | Translate selected text using the configured Google Translate workflow |
+| `Ctrl + Win + 0` inside an Outlook web mail body | Show a conservative attachment-free body and subject/header estimate in MB |
 | Right-click on floating window | Open image translation, annotation, copy/save, and window management menu |
 | Double-click on floating window | Minimize or restore the floating image |
 | `Ctrl + C` on floating window | Copy the floating image |
+| `Ctrl + 0` on floating window | Save Original Size as the default and immediately copy the current image at its original dimensions |
+| `Ctrl + 1` through `Ctrl + 7` on floating window | Set width from 400 to 1600 px and immediately copy the current image |
+| `Ctrl + S` on floating window | Save a JPG to Desktop using the current width and outline settings |
 | `Shift + Drag`, `Ctrl + Drag`, `Alt + Drag`, `Ctrl + Z` on floating window | Red box, yellow highlight, green highlight, undo |
 | `Ctrl + ↑`, `Ctrl + ↓`, `Ctrl + ←`, `Ctrl + Esc` on floating window | Minimize, restore original size, align left, close all |
 
@@ -101,7 +106,9 @@ ClipOCR-Pro stores per-user configuration data in the Windows Registry.
 HKCU\Software\ScreenClipTool
 ```
 
-Current settings include clipboard image scale, selected-text translation language, translation hotkey, and image translation menu languages.
+Current settings include clipboard image size (Original Size or a width from 400 to 1600 px), copied/saved image outline, selected-text translation language, translation hotkey, and image translation menu languages. Clipboard copies remain Windows bitmaps for broad paste compatibility; the tooltip size is an estimate for a JPG saved at quality 85.
+
+Opening the About tab checks the latest GitHub release. `View Update` is enabled only when a newer version exists; it opens the matching GitHub Release page without downloading or installing anything.
 
 Recommended portable deployment structure:
 
@@ -117,6 +124,7 @@ If a team needs shared defaults, export and distribute the values under the Regi
 
 - ClipOCR-Pro runs locally on Windows.
 - Local capture, annotation, copy, save, and resize actions are handled on the user's PC.
+- Outlook web mail estimates are calculated only from the local clipboard and do not send message content externally. Actual sent size may differ.
 - When translation features are used, selected text or images may be processed through external translation services such as Google Translate, depending on the configured workflow.
 - Avoid translating or storing passwords, API keys, personal credentials, confidential financial data, or highly sensitive documents through external services.
 - Review exported Registry settings before distributing them to colleagues, especially if they contain workflow-specific values.
