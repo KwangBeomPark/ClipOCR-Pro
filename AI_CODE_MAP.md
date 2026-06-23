@@ -93,6 +93,7 @@ graph TD
     Main --> Registry[HKCU Registry]
     Main --> Clipboard[Windows Clipboard]
     Main --> HTTP[Google Translate HTTP API]
+    Main --> GitHubAPI[GitHub Releases API]
     Main --> Browser[Google Translate Web / Browser RPA]
     Main --> Floating[Floating Capture Windows]
     Floating --> Annotation[Annotation / Undo]
@@ -117,14 +118,18 @@ graph TD
 | --- | --- | --- | --- |
 | 화면 영역 캡처 | `src/ClipOCR-Pro.ahk` | `ScreenClip2Win`, `SelectArea` | DPI와 멀티 모니터 좌표계 유지 |
 | 플로팅 캡처 창 | `src/ClipOCR-Pro.ahk` | `CreateClipWin`, `ClipWins` | 창 상태는 `HWND` 기반 `Map`에 저장 |
+| 클립보드 이미지 출력 | `src/ClipOCR-Pro.ahk` | `CopyBitmapToClipboard`, `CreateOutputBitmap`, `GetEstimatedJpegSize` | 선택한 고정 가로폭으로 확대/축소, 선택적 아웃라인, CF_DIB 호환성 유지 |
+| JPG 파일 저장 | `src/ClipOCR-Pro.ahk` | `SaveBitmapToDesktop`, `SaveJpegBitmapToFile` | 가로폭/아웃라인 적용, 품질 85, Desktop 저장 |
+| Outlook 웹메일 용량 추정 | `src/ClipOCR-Pro.ahk` | `EstimateOutlookWebMailSize`, `IsSupportedOutlookWebMailHost`, `CalculateOutlookWebMailBytes` | `Ctrl+Win+0`, 첨부 제외, 영어 툴팁, 보수적 MB 추정 |
 | 주석 그리기 | `src/ClipOCR-Pro.ahk` | `SCW_ApplyAnnotation`, `WM_LBUTTONDOWN`, `DrawRectPreview` | UndoStack과 GDI+ 포인터 해제 필요 |
 | Undo | `src/ClipOCR-Pro.ahk` | `SCW_Undo` | 버려지는 비트맵 포인터 해제 필요 |
 | 선택 텍스트 번역 | `src/ClipOCR-Pro.ahk` | `TranslateSelectedText`, `TranslateTextViaGoogle` | 외부 번역 서비스 전송 주의 |
 | 번역 응답 파싱 | `src/ClipOCR-Pro.ahk` | `ParseGoogleTranslateResponse` | Google 응답 구조 변경 가능성 있음 |
 | 번역 팝업 | `src/ClipOCR-Pro.ahk` | `ShowTextTranslationPopup`, `GetPopupPositionNearMouse` | AlwaysOnTop 및 화면 밖 표시 주의 |
 | 이미지 번역 | `src/ClipOCR-Pro.ahk` | `GoogleImageTranslate`, `AutoPasteToGoogleTranslate` | 브라우저 포커스와 웹 UI 변경에 취약 |
-| 설정창 | `src/ClipOCR-Pro.ahk` | `ShowDashboardDialog`, `SaveDashboardSettings` | Registry 호환성 유지 |
-| 매뉴얼 창 | `src/ClipOCR-Pro.ahk` | `ShowManualDialog`, `GetManualText` | 다국어 텍스트 문자열은 기능 문구이므로 주석 정책과 별개 |
+| 설정창 | `src/ClipOCR-Pro.ahk` | `ShowDashboardDialog`, `SaveDashboardSettings`, `GetCenteredPositionOnMouseMonitor` | Registry 호환성 유지, 커서가 있는 모니터 작업 영역 중앙에 표시 |
+| GitHub 업데이트 확인 | `src/ClipOCR-Pro.ahk` | `StartGithubUpdateCheck`, `PollGithubUpdateCheck`, `ParseGithubLatestRelease`, `CompareSemanticVersions` | About 탭에서 비동기 확인, 새 버전이 있을 때만 릴리즈 페이지 버튼 활성화 |
+| 매뉴얼 창 | `src/ClipOCR-Pro.ahk` | `ShowManualDialog`, `GetManualText`, `GetCenteredPositionOnMouseMonitor` | 커서가 있는 모니터 작업 영역 중앙에 표시, 다국어 텍스트 문자열은 기능 문구이므로 주석 정책과 별개 |
 | GDI+ helper | `src/Gdip_All.ahk` | `Gdip_Startup`, `Gdip_BitmapFromScreen`, `Gdip_DisposeImage` | 외부 라이브러리 원본성 유지 |
 
 ---
@@ -133,11 +138,19 @@ graph TD
 
 | 이름 | 용도 | 주의사항 |
 | --- | --- | --- |
-| `APP_NAME`, `APP_VERSION` | 앱 표시명과 버전 | README/릴리즈 표기와 맞춰 관리 |
+| `APP_NAME`, `APP_VERSION` | 앱 표시명과 버전 | 현재 `1.2.2`; EXE 파일 버전은 `1.2.2.0`, README/릴리즈 표기와 맞춰 관리 |
 | `APP_ICON_PATH` | 실행 중 사용할 아이콘 경로 | 컴파일 실행 시 `A_ScriptFullPath`, 소스 실행 시 `src/../assets/ClipOCR-Pro.ico` |
 | `APP_SOURCE_ICON_PATH` | 소스 실행 fallback 아이콘 경로 | `assets/ClipOCR-Pro.ico` 이동 시 함께 수정 필요 |
 | `REG_PATH` | 사용자 설정 Registry 경로 | 기존 사용자 설정 호환성을 위해 변경 금지 |
-| `CLIP_SCALE` | 클립보드 이미지 복사/저장 스케일 | 설정창 및 메뉴와 연동 |
+| `CLIP_WIDTH` | 클립보드 복사/JPG 저장 목표 가로폭 | `0`은 Original Size, 나머지 400~1600px는 원본 크기와 관계없이 선택 폭으로 확대/축소 |
+| `COPY_OUTLINE_ENABLED` | 복사/JPG 저장 이미지의 1px 검정 아웃라인 여부 | 설정창의 체크박스와 연동 |
+| `WINDOW_BORDER_WIDTH` | 플로팅 캡처 창 외곽선 굵기 | 1px 검정, 출력 이미지 아웃라인과 별개 |
+| `ANNOTATION_BORDER_WIDTH` | 빨간 주석 박스 굵기 | 3px 유지, 창 외곽선 변경의 영향을 받지 않음 |
+| `JPG_QUALITY` | JPG 저장과 예상 용량 계산 품질 | 85 고정 |
+| `MAIL_COPY_TIMEOUT_SECONDS` | Outlook 본문 복사 대기 시간 | 3초 |
+| `MAIL_SUBJECT_ALLOWANCE_BYTES` | 제목 추정 여유분 | 8KB |
+| `MAIL_HEADER_ALLOWANCE_BYTES` | Outlook/MIME 헤더 추정 여유분 | 64KB |
+| `MAIL_ENCODING_FACTOR` | 전송 인코딩 보수 계수 | 1.37 |
 | `TEXT_TRANSLATE_LANG` | 선택 텍스트 번역 기본 언어 | `TranslateLang` Registry value 사용 |
 | `TEXT_TRANSLATE_HOTKEY` | 선택 텍스트 번역 단축키 | `Win+CapsLock`은 정적 기본 단축키로 유지 |
 | `TEXT_TRANSLATE_FONT_SIZE` | 번역 팝업 글자 크기 | 실사용 범위로 정규화 |
@@ -147,7 +160,20 @@ graph TD
 | `TextTranslatePopupHwnd` | 현재 번역 팝업 HWND | 새 팝업 표시 전 기존 팝업 정리 |
 | `DashboardHwnd`, `ManualHwnd` | 설정창/매뉴얼 창 중복 방지 | 창 종료 시 0으로 복구 |
 | `TEMP_FILES` | 앱이 생성한 임시 파일 목록 | 종료 시 앱 소유 파일만 삭제 |
-| `ENABLE_BMC_AUTO_DOWNLOAD` | 후원 버튼 이미지 자동 다운로드 제어 | 회사망 보안 기준으로 기본 `false` |
+| `MAIL_SIZE_CHECK_RUNNING` | 메일 용량 추정 중복 실행 방지 | 모든 성공/실패 경로에서 `false`로 복구 |
+| `GITHUB_RELEASES_URL`, `GITHUB_LATEST_RELEASE_API` | 업데이트 페이지와 최신 릴리즈 API 주소 | 공식 저장소 `KwangBeomPark/ClipOCR-Pro`만 사용 |
+| `UPDATE_CHECK_STATE` | 비동기 GitHub 확인 요청과 About UI 상태 | 요청 객체, 타임아웃, 최신 버전, 버튼 컨트롤을 보관하고 설정창 종료 시 분리 |
+| `ENABLE_BMC_AUTO_DOWNLOAD` | 후원 버튼 이미지 자동 다운로드 제어 | 현재 `true`; 회사망에서 외부 이미지 다운로드를 제한하려면 `false`로 변경 |
+
+출력 관련 Registry value:
+
+| Value name | 의미 | 기본값 / 호환성 |
+| --- | --- | --- |
+| `ClipboardWidth` | 클립보드/JPG 출력 목표 가로폭 | `1000`; 허용값 `0`(Original Size), 400, 600, 800, 1000, 1200, 1400, 1600 |
+| `CopyOutline` | 출력 이미지 1px 검정 아웃라인 | `1`; `0`은 비활성 |
+| `Scale` | 과거 퍼센트 스케일 설정 | 삭제하지 않지만 신규 출력 로직에서는 사용하지 않음 |
+
+플로팅 창 전용 출력 단축키 `Ctrl+0`은 Original Size를 선택하고 현재 이미지를 즉시 복사한다. `Ctrl+1`~`Ctrl+7`은 각각 400~1600px를 선택해 같은 방식으로 복사한다. 이 단축키들은 플로팅 캡처 창이 활성화된 경우에만 동작한다. `Ctrl+C`는 현재 설정으로 복사하고, `Ctrl+S`는 같은 설정으로 JPG를 저장한다. 별도의 전역 `Ctrl+Win+0`은 Outlook 작성 본문을 복사해 첨부 제외 보수적 용량을 영어 툴팁으로 표시한다.
 
 `ClipWins[hwnd]` 주요 상태 key:
 
@@ -192,8 +218,10 @@ graph TD
 | README | Buy Me a Coffee 링크 | 사용자가 공개 유지 선택 |
 | About 화면 | GitHub profile 링크 | 사용자가 공개 유지 선택 |
 | About 화면 | Buy Me a Coffee 링크 | 사용자가 공개 유지 선택 |
+| About 화면 | `api.github.com/repos/KwangBeomPark/ClipOCR-Pro/releases/latest` | 탭 최초 진입 또는 `Check Again` 시 최신 공개 릴리즈 메타데이터만 조회 |
+| About 화면 | `github.com/KwangBeomPark/ClipOCR-Pro/releases/...` | 원격 버전이 더 높을 때만 `View Update` 버튼을 활성화하며 브라우저로 페이지를 열고 다운로드/설치는 하지 않음 |
 | 앱 실행 중 | Google favicon 다운로드 | GitHub 아이콘 표시 목적, 실패해도 기본 링크 표시 |
-| 앱 설정 | BMC 버튼 다운로드 | `ENABLE_BMC_AUTO_DOWNLOAD := false`로 기본 비활성 |
+| 앱 실행 중 | BMC 버튼 다운로드 | 현재 `ENABLE_BMC_AUTO_DOWNLOAD := true`; 실패 시 텍스트 링크로 대체 |
 | 텍스트 번역 | `translate.googleapis.com` | 선택 텍스트가 외부 서비스로 전송될 수 있음 |
 | 이미지 번역 | `translate.google.com` | 캡처 이미지가 외부 서비스로 전송될 수 있음 |
 
@@ -225,6 +253,12 @@ graph TD
 * AutoHotkey v2 문법만 사용하고 v1 문법을 섞지 않는다.
 * `src/Gdip_All.ahk`는 외부 라이브러리로 보고 원본성, 라이선스, 호환성을 우선한다.
 * `pBitmap`, `pGraphics`, `pPen`, `pBrush`, `hBitmap` 등 GDI+ 리소스는 생성 후 해제 경로를 확인한다.
+* 클립보드 전달 형식은 PNG/JPG 파일이 아니라 Windows `CF_DIB` 비트맵이다. JPG 품질 85는 Desktop 저장과 툴팁 용량 추정에만 적용한다.
+* 예상 용량 계산용 임시 JPG는 `%TEMP%\ClipOCR-Pro\jpeg_estimate_*.jpg`에 생성되며 함수 종료 전에 삭제되어야 한다.
+* Outlook 용량 추정은 Edge/Chrome의 Outlook 제목 창, `olk.exe`/`OUTLOOK.EXE`, 또는 Outlook 제목을 가진 `msedgewebview2.exe` 포커스 조합만 허용한다. 다른 WebView2 호스트는 거부한다.
+* 메일 용량 값은 `ClipboardAll.Size`에 제목 8KB, 헤더 64KB, 인코딩 계수 1.37을 적용한 추정치이며 첨부파일과 실제 서버 저장 크기를 포함하지 않는다.
+* GitHub 업데이트 확인은 15초 타임아웃의 비동기 WinHTTP 요청으로 수행한다. 태그가 버전 형식이 아니면 릴리즈명과 자산명에서 semantic version을 보수적으로 찾고, 신뢰된 공식 릴리즈 URL만 열어야 한다.
+* 업데이트 확인 실패는 앱 시작과 설정 저장을 막지 않으며, 자동 다운로드·자동 설치·실행 파일 교체는 수행하지 않는다.
 * 클립보드 백업/복구 실패는 사용자 데이터 손상으로 이어질 수 있으므로 안전 fallback을 유지한다.
 * AlwaysOnTop 캡처 창은 InputBox, MsgBox, 브라우저 RPA, 설정창과 Z-order 충돌이 날 수 있다.
 * Google Translate API와 Web UI는 외부 서비스라 응답 구조, 타이틀, 붙여넣기 동작이 바뀔 수 있다.
@@ -240,3 +274,8 @@ graph TD
 | 2026-06-14 | `ClipOCR-Pro.ico` 멀티사이즈 재생성, 컴파일된 exe 내장 아이콘 우선 사용 로직 반영 | AI Agent |
 | 2026-06-14 | `manual.png` 공개용 매뉴얼 인포그래픽 생성 및 README 참조 반영 | AI Agent |
 | 2026-06-14 | GitHub 소스 중심 공개 기준, 제외 파일, 보안 점검 결과, 영어 주석/식별자 원칙 반영 | AI Agent |
+| 2026-06-22 | 플로팅 창 1px 검정 외곽선, 400~1600px 출력 단축키, 선택적 아웃라인, JPG 품질 85 저장과 용량 툴팁 반영 | AI Agent |
+| 2026-06-22 | 앱 표시 버전을 1.2.1, 컴파일 EXE 파일 버전을 1.2.1.0으로 갱신 | AI Agent |
+| 2026-06-22 | Ctrl+Win+0 Outlook 웹메일 용량 추정, WebView2 감지, 영어 툴팁, 선택 가로폭 강제 확대/축소 반영 | AI Agent |
+| 2026-06-22 | 앱 버전 1.2.2, Original Size와 플로팅 전용 Ctrl+0, About 탭 GitHub 최신 릴리즈 확인 및 웹페이지 열기 반영 | AI Agent |
+| 2026-06-22 | 설정창과 매뉴얼 창을 커서가 있는 모니터 중앙에 배치하고 열린 매뉴얼 재호출 시 현재 모니터로 이동하도록 수정 | AI Agent |
