@@ -1,12 +1,12 @@
 #Requires AutoHotkey v2.0
 #SingleInstance Force
 ;@Ahk2Exe-SetMainIcon ..\assets\ClipOCR-Pro.ico
-;@Ahk2Exe-SetVersion 1.2.2.0
+;@Ahk2Exe-SetVersion 1.2.3.0
 #Include Gdip_All.ahk
 
 ; ── App metadata ──
 global APP_NAME := "ClipOCR-Pro"
-global APP_VERSION := "1.2.2"
+global APP_VERSION := "1.2.3"
 global APP_ICON_PATH := A_IsCompiled ? A_ScriptFullPath : A_ScriptDir "\..\assets\ClipOCR-Pro.ico"
 global APP_SOURCE_ICON_PATH := A_ScriptDir "\..\assets\ClipOCR-Pro.ico"
 global GITHUB_RELEASES_URL := "https://github.com/KwangBeomPark/ClipOCR-Pro/releases"
@@ -69,6 +69,7 @@ global TEXT_TRANSLATE_LANG := "ko"
 global TEXT_TRANSLATE_HOTKEY := "#CapsLock"
 global TEXT_TRANSLATE_FONT_SIZE := 10
 global IMAGE_TRANSLATE_LANGS := "ko,en,pl"
+global MANUAL_LANG := "en"
 
 ; ── Runtime state ──
 global TRAY_TEXT_TRANSLATE_ITEM := ""
@@ -123,6 +124,14 @@ try {
     IMAGE_TRANSLATE_LANGS := NormalizeLangCodeList(savedImageLangs)
 } catch {
     IMAGE_TRANSLATE_LANGS := NormalizeLangCodeList(IMAGE_TRANSLATE_LANGS)
+}
+
+try {
+    savedManualLang := RegRead(REG_PATH, "ManualLang")
+    if (savedManualLang == "ko" || savedManualLang == "en" || savedManualLang == "pl" || savedManualLang == "de" || savedManualLang == "fr" || savedManualLang == "es")
+        MANUAL_LANG := savedManualLang
+} catch {
+    MANUAL_LANG := "en"
 }
 
 ; ── System tray icon and menu customization ──
@@ -1122,7 +1131,12 @@ ShowTextTranslationPopup(sourceText, translatedText) {
 
     ; ── ComboBox change triggers automatic retranslation ──
     OnLangChange(*) {
-        UpdateTextTranslationPopupResult(sourceText, LangCombo.Text, ResultEdit, currentText)
+        selectedLabel := LangCombo.Text
+        if (selectedLabel != "ORIGINAL") {
+            targetLang := GetTextTranslateLangCodeByLabel(selectedLabel)
+            SetTextTranslateLang(targetLang)
+        }
+        UpdateTextTranslationPopupResult(sourceText, selectedLabel, ResultEdit, currentText)
     }
     LangCombo.OnEvent("Change", OnLangChange)
 
@@ -2348,11 +2362,12 @@ ShowDashboardDialog() {
     lbl2 := DashGui.Add("Text", "x180 y275 w580 h22 +BackgroundTrans cFFFFFF", "System Settings")
     lbl2.SetFont("s10 Bold")
     GenPanel.Push(lbl2)
-    GenPanel.Push(DashGui.Add("Text", "x180 y305 w580 h52 Background2A2D3C", ""))
+    GenPanel.Push(DashGui.Add("Text", "x180 y305 w580 h58 Background2A2D3C", ""))
     isStartup := IsStartupEnabled()
-    StartupChk := DashGui.Add("CheckBox", "x195 y315 w550 h30 Background2A2D3C cWhite" (isStartup ? " Checked" : ""), "  Run app when Windows starts")
+    StartupChk := DashGui.Add("CheckBox", "x195 y313 w550 h24 Background2A2D3C cWhite" (isStartup ? " Checked" : ""), "  Run app when Windows starts")
     StartupChk.SetFont("s10 Bold", "Segoe UI")
     GenPanel.Push(StartupChk)
+    GenPanel.Push(DashGui.Add("Text", "x198 y339 w540 h18 Background2A2D3C cA0A0A0", "Creates a Startup folder shortcut after Save and Close."))
 
     ; 2. Translation Panel
     TrnPanel := []
@@ -2640,7 +2655,11 @@ SCW_SortCascade() {
 }
 
 ; ── Windows startup auto-run helpers ──
-IsStartupEnabled() {
+GetStartupShortcutPath() {
+    return A_Startup "\ClipOCR-Pro.lnk"
+}
+
+HasLegacyStartupRegistry() {
     static regKey := "HKCU\Software\Microsoft\Windows\CurrentVersion\Run"
     try {
         val := RegRead(regKey, "ScreenClipTool")
@@ -2650,15 +2669,50 @@ IsStartupEnabled() {
     }
 }
 
-EnableStartup() {
+DeleteLegacyStartupRegistry() {
     static regKey := "HKCU\Software\Microsoft\Windows\CurrentVersion\Run"
-    exePath := A_IsCompiled ? A_ScriptFullPath : ('"' A_AhkPath '" "' A_ScriptFullPath '"')
-    return SafeRegWriteString(exePath, regKey, "ScreenClipTool")
+    try RegDelete(regKey, "ScreenClipTool")
+}
+
+IsStartupEnabled() {
+    return (FileExist(GetStartupShortcutPath()) != "" || HasLegacyStartupRegistry())
+}
+
+EnableStartup() {
+    global APP_NAME, APP_ICON_PATH, APP_SOURCE_ICON_PATH
+
+    linkPath := GetStartupShortcutPath()
+    targetPath := A_IsCompiled ? A_ScriptFullPath : A_AhkPath
+    shortcutArgs := A_IsCompiled ? "" : ('"' A_ScriptFullPath '"')
+
+    if (targetPath == "")
+        return false
+
+    iconPath := ""
+    if FileExist(APP_ICON_PATH)
+        iconPath := APP_ICON_PATH
+    else if FileExist(APP_SOURCE_ICON_PATH)
+        iconPath := APP_SOURCE_ICON_PATH
+
+    try {
+        DirCreate(A_Startup)
+        if FileExist(linkPath)
+            FileDelete(linkPath)
+        FileCreateShortcut(targetPath, linkPath, A_ScriptDir, shortcutArgs, APP_NAME, iconPath)
+        DeleteLegacyStartupRegistry()
+        return (FileExist(linkPath) != "")
+    } catch {
+        return false
+    }
 }
 
 DisableStartup() {
-    static regKey := "HKCU\Software\Microsoft\Windows\CurrentVersion\Run"
-    try RegDelete(regKey, "ScreenClipTool")
+    linkPath := GetStartupShortcutPath()
+    try {
+        if FileExist(linkPath)
+            FileDelete(linkPath)
+    }
+    DeleteLegacyStartupRegistry()
     return !IsStartupEnabled()
 }
 
@@ -2666,7 +2720,7 @@ DisableStartup() {
 global ManualHwnd := 0
 
 ShowManualDialog() {
-    global ManualHwnd
+    global ManualHwnd, MANUAL_LANG, REG_PATH
 
     if (ManualHwnd && WinExist("ahk_id " ManualHwnd)) {
         WinGetPos(, , &manualW, &manualH, "ahk_id " ManualHwnd)
@@ -2684,10 +2738,23 @@ ShowManualDialog() {
     ManGui.Add("Text", "x14 y12 w70 h22 cBlack", "Language:")
     ManGui.SetFont("s9", "Segoe UI")
     langList := ["KR 한국어", "US English", "PL Polski", "DE Deutsch", "FR Français", "ES Español"]
-    LangDDL := ManGui.Add("DropDownList", "x90 y9 w140 Choose2", langList)
+
+    defaultIndex := 2 ; Default to English (Choose2)
+    if (MANUAL_LANG == "ko")
+        defaultIndex := 1
+    else if (MANUAL_LANG == "pl")
+        defaultIndex := 3
+    else if (MANUAL_LANG == "de")
+        defaultIndex := 4
+    else if (MANUAL_LANG == "fr")
+        defaultIndex := 5
+    else if (MANUAL_LANG == "es")
+        defaultIndex := 6
+
+    LangDDL := ManGui.Add("DropDownList", "x90 y9 w140 Choose" defaultIndex, langList)
 
     ; ── Manual text area ──
-    ManEdit := ManGui.Add("Edit", "x14 y42 w552 h800 ReadOnly +Multi +VScroll", GetManualText("en"))
+    ManEdit := ManGui.Add("Edit", "x14 y42 w552 h800 ReadOnly +Multi +VScroll", GetManualText(MANUAL_LANG))
 
     ; ── Bottom Close button ──
     CloseMBtn := ManGui.Add("Button", "x240 y852 w100 h32", "Close")
@@ -2695,6 +2762,7 @@ ShowManualDialog() {
 
     ; Language-change event
     OnManualLangChange(*) {
+        global MANUAL_LANG
         selected := LangDDL.Text
         if InStr(selected, "한국어")
             lang := "ko"
@@ -2708,6 +2776,9 @@ ShowManualDialog() {
             lang := "es"
         else
             lang := "en"
+
+        MANUAL_LANG := lang
+        try SafeRegWriteString(lang, REG_PATH, "ManualLang")
         ManEdit.Value := GetManualText(lang)
     }
     LangDDL.OnEvent("Change", OnManualLangChange)

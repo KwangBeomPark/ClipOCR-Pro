@@ -138,7 +138,7 @@ graph TD
 
 | 이름 | 용도 | 주의사항 |
 | --- | --- | --- |
-| `APP_NAME`, `APP_VERSION` | 앱 표시명과 버전 | 현재 `1.2.2`; EXE 파일 버전은 `1.2.2.0`, README/릴리즈 표기와 맞춰 관리 |
+| `APP_NAME`, `APP_VERSION` | 앱 표시명과 버전 | 현재 `1.2.3`; EXE 파일 버전은 `1.2.3.0`, README/릴리즈 표기와 맞춰 관리 |
 | `APP_ICON_PATH` | 실행 중 사용할 아이콘 경로 | 컴파일 실행 시 `A_ScriptFullPath`, 소스 실행 시 `src/../assets/ClipOCR-Pro.ico` |
 | `APP_SOURCE_ICON_PATH` | 소스 실행 fallback 아이콘 경로 | `assets/ClipOCR-Pro.ico` 이동 시 함께 수정 필요 |
 | `REG_PATH` | 사용자 설정 Registry 경로 | 기존 사용자 설정 호환성을 위해 변경 금지 |
@@ -155,6 +155,7 @@ graph TD
 | `TEXT_TRANSLATE_HOTKEY` | 선택 텍스트 번역 단축키 | `Win+CapsLock`은 정적 기본 단축키로 유지 |
 | `TEXT_TRANSLATE_FONT_SIZE` | 번역 팝업 글자 크기 | 실사용 범위로 정규화 |
 | `IMAGE_TRANSLATE_LANGS` | 이미지 번역 메뉴 언어 목록 | 콤마 구분 문자열로 저장 |
+| `MANUAL_LANG` | 매뉴얼 다이얼로그 기본 언어 | `ManualLang` Registry value 사용 |
 | `ClipWins` | 플로팅 캡처 창 상태 저장 | Key는 `HWND`, Value는 상태 object |
 | `RightClickedHwnd` | 우클릭 메뉴 대상 창 | 메뉴 핸들러에서 대상 확인 |
 | `TextTranslatePopupHwnd` | 현재 번역 팝업 HWND | 새 팝업 표시 전 기존 팝업 정리 |
@@ -172,6 +173,9 @@ graph TD
 | `ClipboardWidth` | 클립보드/JPG 출력 목표 가로폭 | `1000`; 허용값 `0`(Original Size), 400, 600, 800, 1000, 1200, 1400, 1600 |
 | `CopyOutline` | 출력 이미지 1px 검정 아웃라인 | `1`; `0`은 비활성 |
 | `Scale` | 과거 퍼센트 스케일 설정 | 삭제하지 않지만 신규 출력 로직에서는 사용하지 않음 |
+| `ManualLang` | 매뉴얼 다이얼로그 언어 | `en`; 허용값: `ko`, `en`, `pl`, `de`, `fr`, `es` |
+
+Windows 시작 실행은 설정 저장 시 사용자 Startup 폴더의 `ClipOCR-Pro.lnk` 바로가기로 관리한다. 기존 버전의 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\ScreenClipTool` 값은 legacy 상태로 인식하되, 새 설정을 저장할 때 제거한다.
 
 플로팅 창 전용 출력 단축키 `Ctrl+0`은 Original Size를 선택하고 현재 이미지를 즉시 복사한다. `Ctrl+1`~`Ctrl+7`은 각각 400~1600px를 선택해 같은 방식으로 복사한다. 이 단축키들은 플로팅 캡처 창이 활성화된 경우에만 동작한다. `Ctrl+C`는 현재 설정으로 복사하고, `Ctrl+S`는 같은 설정으로 JPG를 저장한다. 별도의 전역 `Ctrl+Win+0`은 Outlook 작성 본문을 복사해 첨부 제외 보수적 용량을 영어 툴팁으로 표시한다.
 
@@ -279,3 +283,5 @@ graph TD
 | 2026-06-22 | Ctrl+Win+0 Outlook 웹메일 용량 추정, WebView2 감지, 영어 툴팁, 선택 가로폭 강제 확대/축소 반영 | AI Agent |
 | 2026-06-22 | 앱 버전 1.2.2, Original Size와 플로팅 전용 Ctrl+0, About 탭 GitHub 최신 릴리즈 확인 및 웹페이지 열기 반영 | AI Agent |
 | 2026-06-22 | 설정창과 매뉴얼 창을 커서가 있는 모니터 중앙에 배치하고 열린 매뉴얼 재호출 시 현재 모니터로 이동하도록 수정 | AI Agent |
+| 2026-06-30 | 번역 팝업창 및 매뉴얼 다이얼로그의 마지막 선택 언어 저장 및 유지 기능 추가 | AI Agent |
+| 2026-06-30 | 앱 버전 1.2.3, Windows 시작 실행을 Startup 폴더 바로가기 방식으로 변경하고 legacy Run Registry 값을 정리하도록 수정 | AI Agent |
